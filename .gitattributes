@@ -1,0 +1,17 @@
+# Default: text files use LF line endings (cross-platform safe; matches Vercel/Linux build env)
+* text=auto eol=lf
+
+# Windows-specific scripts always CRLF
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Lock binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.svg text
+*.pdf binary
+*.ico binary
+*.woff binary
+*.woff2 binary

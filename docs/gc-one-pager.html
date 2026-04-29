@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Product Summary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap" rel="stylesheet">
+<style>
+  @page {
+    size: letter;
+    margin: 0 0.65in 0.6in;
+  }
+
+  :root {
+    --ink: #0F172A;
+    --body: #334155;
+    --slate: #64748B;
+    --soft: #94A3B8;
+    --hairline: #E2E8F0;
+    --tint: #F8FAFC;
+    --tint-blue: #EFF6FF;
+    --accent: #1D4ED8;
+    --accent-bright: #2563EB;
+    --accent-soft: #93C5FD;
+    --bg: #FFFFFF;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--body);
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 10pt;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .accent-band {
+    height: 6pt;
+    background: linear-gradient(90deg, var(--ink) 0%, var(--ink) 60%, var(--accent) 60%, var(--accent) 100%);
+  }
+
+  .page {
+    max-width: 7.2in;
+    margin: 0 auto;
+    padding: 0.45in 0.65in 0;
+  }
+
+  .topstrip {
+    display: flex;
+    align-items: baseline;
+    gap: 12pt;
+    padding-bottom: 12pt;
+    border-bottom: 1px solid var(--hairline);
+    margin-bottom: 36pt;
+  }
+  .topstrip .dot {
+    width: 6pt;
+    height: 6pt;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+  .topstrip .mark {
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+
+  .hero {
+    margin: 0 0 40pt 0;
+    padding-left: 14pt;
+    border-left: 3pt solid var(--accent);
+  }
+  h1 {
+    font-family: 'Source Serif 4', 'Source Serif Pro', Georgia, serif;
+    font-size: 28pt;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    color: var(--ink);
+    margin: 0 0 18pt 0;
+    max-width: 6.4in;
+  }
+  .lede {
+    font-size: 11pt;
+    line-height: 1.6;
+    color: var(--body);
+    margin: 0;
+    max-width: 6.2in;
+  }
+
+  .section {
+    margin: 32pt 0 0 0;
+    padding-top: 0;
+    position: relative;
+  }
+  .section::before {
+    content: '';
+    display: block;
+    height: 1.5px;
+    background: var(--ink);
+  }
+  .section::after {
+    content: '';
+    display: block;
+    height: 2pt;
+    width: 36pt;
+    background: var(--accent);
+    margin-top: -1.5px;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14pt;
+    margin: 18pt 0 16pt 0;
+  }
+  .section-num {
+    font-size: 9pt;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    min-width: 22pt;
+  }
+  .section-name {
+    font-size: 11pt;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--ink);
+  }
+  .section-tag {
+    margin-left: auto;
+    font-size: 8pt;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--slate);
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 30pt;
+    row-gap: 6pt;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  li {
+    position: relative;
+    padding-left: 18pt;
+    margin: 0 0 10pt 0;
+    color: var(--body);
+    line-height: 1.55;
+    font-size: 10pt;
+  }
+  li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 8pt;
+    height: 2pt;
+    background: var(--accent);
+    border-radius: 1pt;
+  }
+
+  /* Roadmap bullets — softer accent for visual distinction */
+  .roadmap-list li::before {
+    background: var(--accent-soft);
+  }
+
+  strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .endmark {
+    margin-top: 50pt;
+    height: 4pt;
+    width: 80pt;
+    background: var(--accent);
+    border-radius: 1pt;
+  }
+
+  @media print {
+    body { font-size: 10pt; }
+    .page { margin: 0; padding: 0.45in 0.65in 0; max-width: none; }
+    .accent-band, .endmark, li::before, .section::after, .topstrip .dot {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+
+  .section-head { break-after: avoid; }
+  li { break-inside: avoid; }
+</style>
+</head>
+<body>
+<div class="accent-band"></div>
+<div class="page">
+
+  <div class="topstrip">
+    <div class="dot"></div>
+    <div class="mark">Product Summary</div>
+  </div>
+
+  <section class="hero">
+    <h1>One system for the monthly pay-app cycle, change orders, and reconciliation &mdash; everything in sync.</h1>
+    <p class="lede">Schedule of values, subcontracts, change orders, and pay applications stay in sync across subcontractors, internal teams, architects, and owners. No more reconciling Excel against Excel against email.</p>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">01</div>
+      <div class="section-name">Problems addressed</div>
+    </div>
+    <ul class="grid-2">
+      <li>Schedule of values, change order tracker, and forecast each maintained in <strong>separate Excel files</strong> that must reconcile manually.</li>
+      <li><strong>Subcontracts, COIs, signed change orders, and pay-app PDFs</strong> scattered across drive folders, email, and paper files.</li>
+      <li>Subcontractor pay applications submitted in <strong>inconsistent PDF formats</strong> requiring manual re-entry.</li>
+      <li>Change orders <strong>approved by owners but not reflected</strong> in subcontract ceilings or SoV, causing invoices to be held.</li>
+      <li>Compliance documents (<strong>lien waivers, COIs, certified payroll, prevailing wage</strong>) missed at month-end.</li>
+      <li><strong>Reconciliation</strong> required across Excel, AIA / Cantina-style billing tools, and QuickBooks.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">02</div>
+      <div class="section-name">At launch</div>
+      <div class="section-tag">Available day one</div>
+    </div>
+    <ul>
+      <li><strong>Single source of truth</strong> for schedule of values, subcontracts, change orders, pay applications, supporting documents, and audit trail.</li>
+      <li><strong>Owner-approved change orders keep everything in sync</strong> &mdash; the subcontract ceiling, the schedule of values, and every affected line update at the same time. No manual re-entry.</li>
+      <li><strong>Continuous drift detection</strong> surfacing anything out of sync on a dashboard before it stalls a payment cycle.</li>
+      <li><strong>Subcontractor submission portal</strong> with line-item validation against contract ceiling.</li>
+      <li><strong>AIA G702/G703-compatible</strong> pay-app generation, sworn statements, and magic-link approvals for architects and owners.</li>
+      <li><strong>QuickBooks-compatible CSV export</strong> for AP and AR entries.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">03</div>
+      <div class="section-name">On the roadmap</div>
+      <div class="section-tag">Following six months</div>
+    </div>
+    <ul class="roadmap-list">
+      <li><strong>State-specific lien waiver generation</strong> &mdash; partial and final, conditional and unconditional, ready for the lender or owner.</li>
+      <li><strong>Compliance document tracking</strong> &mdash; COIs, W-9s, certified payroll, and prevailing wage docs with expiration alerts; missing docs hold pay-app submission.</li>
+      <li><strong>AI extraction from sub-submitted PDFs</strong> for subs who don&rsquo;t use the portal &mdash; line items pulled into the same form for review.</li>
+      <li><strong>QuickBooks two-way API integration</strong> &mdash; invoices and bills push automatically; payment status pulls back.</li>
+      <li><strong>Quarterly WIP report generation</strong> &mdash; percentage-of-completion math handled automatically; matches what bonding companies and lenders expect.</li>
+      <li><strong>Cash flow, project margin, and forecast dashboards</strong> for principal-level visibility across all active projects.</li>
+      <li><strong>DocuSign / e-signature integration</strong> for in-app signing on contracts, change orders, and pay apps.</li>
+      <li><strong>Mobile field interface</strong> for project managers and superintendents to enter percent-complete from the jobsite.</li>
+    </ul>
+  </section>
+
+  <div class="endmark"></div>
+
+</div>
+</body>
+</html>

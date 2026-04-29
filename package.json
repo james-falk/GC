@@ -1,0 +1,24 @@
+{
+  "name": "constructor",
+  "private": true,
+  "version": "0.0.1",
+  "description": "GC middleware — pay-app, change order, and reconciliation system",
+  "packageManager": "pnpm@9.15.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @constructor/web dev",
+    "build": "pnpm -r --parallel build",
+    "lint": "pnpm -r --parallel lint",
+    "test": "pnpm -r --parallel test",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "db:generate": "pnpm --filter @constructor/db generate",
+    "db:migrate": "pnpm --filter @constructor/db migrate",
+    "db:seed": "pnpm --filter @constructor/db seed"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
