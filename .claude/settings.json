@@ -89,7 +89,9 @@
       "mcp__whimsical__redo",
       "Bash(git -C \"c:/Users/james/OneDrive/Desktop/git/GC\" status --short)",
       "Bash(git -C \"c:/Users/james/OneDrive/Desktop/git/GC\" add -A)",
-      "Bash(git -C c:/Users/james/OneDrive/Desktop/git/GC commit -m ' *)"
+      "Bash(git -C c:/Users/james/OneDrive/Desktop/git/GC commit -m ' *)",
+      "Bash(git -C \"c:/Users/james/OneDrive/Desktop/git/GC\" push -u origin main)",
+      "Bash(git -C \"c:/Users/james/OneDrive/Desktop/git/GC\" push)"
     ],
     "additionalDirectories": [
       "C:\\Users\\james\\OneDrive\\Desktop\\git\\claude-config"

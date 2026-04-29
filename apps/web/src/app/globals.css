@@ -1,0 +1,15 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink: #0f172a;
+  --color-body: #334155;
+  --color-slate: #64748b;
+  --color-soft: #94a3b8;
+  --color-hairline: #e2e8f0;
+  --color-accent: #1d4ed8;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
