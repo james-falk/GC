@@ -15,6 +15,20 @@
       "when": 1777515332415,
       "tag": "0001_smiling_peter_quill",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777518609043,
+      "tag": "0002_awesome_guardsmen",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777520242756,
+      "tag": "0003_nappy_harrier",
+      "breakpoints": true
     }
   ]
 }
