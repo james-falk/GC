@@ -92,7 +92,9 @@
       "Bash(git -C c:/Users/james/OneDrive/Desktop/git/GC commit -m ' *)",
       "Bash(git -C \"c:/Users/james/OneDrive/Desktop/git/GC\" push -u origin main)",
       "Bash(git -C \"c:/Users/james/OneDrive/Desktop/git/GC\" push)",
-      "Bash(pnpm install *)"
+      "Bash(pnpm install *)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm --filter @constructor/web dev)"
     ],
     "additionalDirectories": [
       "C:\\Users\\james\\OneDrive\\Desktop\\git\\claude-config"
