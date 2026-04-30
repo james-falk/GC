@@ -4,16 +4,16 @@ This file is read into every Claude Code session that opens this repo. It overla
 
 ## Current build state — read first
 
-**Day 1 of MVP build COMPLETE** (2026-04-29). End-to-end Clerk → tenants sync verified on production (Vercel + Neon). Day 2 about to start.
+**Day 2 + Day 3 Phase A COMPLETE** (2026-04-30). Schema (15 tables) on Neon, Clerk user/org webhooks live, domain scaffolding + first invariant landed, authenticated app shell + projects list + create flow shipped. Day 3 Phase B (SoV editor) is next.
 
-Single source of truth for current build state: [`docs/BUILD-STATUS.md`](./docs/BUILD-STATUS.md). **Read that before doing anything in code.**
+Single source of truth for current build state: [`docs/BUILD-STATUS.md`](./docs/BUILD-STATUS.md). **Read that before doing anything in code** — including the lessons-burned-in section.
 
 Key facts:
 - Repo: `https://github.com/james-falk/GC`. Local: this directory.
-- Production deploy: `https://gc-web-pink.vercel.app`.
+- Production deploy: `https://gc-web-pink.vercel.app` (currently stale — Vercel Hobby rate limit hit 2026-04-30; clears overnight or upgrade to Pro).
 - Project codename: **constructor**. Root npm package: `gc-monorepo` (not `constructor` — that name is a JS reserved word and breaks pnpm). Sub-package scope: `@constructor/*` (this works fine because scoped names don't hit `Object.prototype`).
-- Two Drizzle migrations applied to Neon (`tenants` table with `clerk_org_id`).
-- Clerk webhook handler at `apps/web/src/app/api/webhooks/clerk/route.ts` — handles `organization.*` events, signature-verified via svix.
+- Three Drizzle migrations applied to Neon: `0000` tenants, `0001` clerk_org_id, `0002` 14 entities + 11 enums, `0003` users.role nullable.
+- Clerk webhook handler at `apps/web/src/app/api/webhooks/clerk/route.ts` — handles `organization.*` and `user.*` events, signature-verified via svix.
 - Env vars wired both locally (`apps/web/.env.local`) and on Vercel (Production + Preview + Development).
 
 ## What this project is

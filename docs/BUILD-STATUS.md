@@ -62,31 +62,138 @@ vercel, sentry, cloudflare, github, neon, clerk, paper (local), whimsical (local
 
 ---
 
-## Day 2 — NEXT (not yet started)
+## 2026-04-30 — Day 2: COMPLETE, Day 3 Phase A: COMPLETE
 
-Sequence:
+Day 2 and Day 3 Phase A shipped in the same calendar day.
 
-1. **Drizzle schema for the remaining 14 entities** in one migration:
-   - `users`, `organizations` (owners + architects), `subcontractors`, `projects`, `subcontracts`, `sov_lines` (with self-referencing `parent_line_id`), `change_orders`, `change_order_lines`, `pay_applications` (with `direction` enum), `pay_application_lines`, `sworn_statements`, `document_attachments` (polymorphic), `approval_events` (polymorphic, append-only), `magic_links`.
-   - Reference: [`gc-data-model.md`](./gc-data-model.md) for exact fields, types, relationships, invariants.
-   - Generate migration `0002_*`, apply to Neon, verify with `query-tenants.ts`-style script.
-2. **User sync webhook** — extend `/api/webhooks/clerk` to handle `user.created/updated/deleted` → `users` table. Reuses the same svix verification.
-3. **`packages/domain` scaffolding** — pure TypeScript types and one invariant function:
-   - State machine type definitions (discriminated unions) for SubPayApp, OwnerPayApp, ChangeOrder, SwornStatement. Reference: [`gc-state-machines.md`](./gc-state-machines.md).
-   - First invariant function (`subBillableCeiling`) implemented as pure function with Vitest property-based test.
-   - Reference: [`gc-data-model.md`](./gc-data-model.md) § Invariants.
+### Day 2 — what shipped
 
-### Day 2 entry point for next session
+| Step | Commit |
+|---|---|
+| 14 remaining Drizzle entities + migration `0002` | `1a5655a` |
+| Make `users.role` nullable + migration `0003` | (same) |
+| Verification script `packages/db/src/scripts/list-tables.ts` | (same) |
+| Clerk `user.*` webhook → `users` sync | `84a581d` |
+| Domain scaffolding: 4 state-machine type modules + `checkSubBillableCeiling` invariant + 7 vitest tests | `50b8d61` |
+| Fix CI pnpm version mismatch + workspace lint/test stubs | `c7a670f` |
 
-Open `packages/db/src/schema/tenant.ts` for the entity pattern. Each remaining entity follows the same shape (one file per entity, exported from `schema/index.ts`). Generate migration with `pnpm db:generate`, apply with `pnpm db:migrate`, verify with the query-tenants pattern.
+### Day 3 Phase A — what shipped
+
+First user-visible feature work. The site is no longer a one-page landing.
+
+| Step | Commit |
+|---|---|
+| Authenticated route group + app shell (top bar + sidebar nav) | `9ddedb4` |
+| `/projects` list page (Server Component, tenant-scoped) | (same) |
+| `/projects/new` form + zod-validated server action | (same) |
+| `/projects/[id]` stub (real header, tab nav, SoV placeholder) | (same) |
+| `getCurrentTenant()` server helper (Clerk org → tenants row) | (same) |
+| Root page redirects signed-in users to `/projects` | (same) |
+| Fix post-sign-in modal redirect via `fallbackRedirectUrl` | `9ea2ad6` |
+
+### State of the site (as of this writing)
+
+Local dev: signing in works. Empty-state CTA → /projects/new → form → submit → /projects/[id]. Sidebar shows 8 nav items; only Projects is wired, the rest are visibly disabled.
+
+**Vercel is rate-limited** (Hobby tier daily cap hit by burst pushes during Day 1 + Day 2). Today's commits are on origin/main + green CI but haven't deployed. Latest production deploy is yesterday's `49a090b`. Limit clears on a 24h rolling window — should recover overnight, or upgrade to Pro to remove the cap.
+
+### Lessons burned in (Day 2 + Day 3A)
+
+6. **Postgres truncates FK constraint names at 63 bytes.** Drizzle generates names like `subcontracts_signed_contract_attachment_id_document_attachments_id_fk` which trigger NOTICEs and get silently truncated. Non-fatal, but if you ever search the catalog by exact name, know that the on-disk name may be shorter than the migration SQL.
+7. **`pay_app_status` is a union enum** of SubPayApp + OwnerPayApp states. The valid set per row is determined by `direction` and enforced in the domain layer — the DB doesn't constrain it.
+8. **Clerk modal sign-in (`mode="modal"`) doesn't trigger a full page navigation,** so server-side `redirect()` based on `auth().userId` won't fire. Use `fallbackRedirectUrl` on `SignInButton`/`SignUpButton` to route the user explicitly after the modal closes.
+9. **CI was red from Day 1 → Day 2 morning** — `pnpm/action-setup@v4` was hardcoded to 9.15.0 while `package.json` declared `pnpm@10.4.1`. BUILD-STATUS earlier claimed CI was passing; that was wrong. Fixed in `c7a670f`. Lesson: **don't trust BUILD-STATUS claims about CI without verifying with `gh run list`.**
+10. **Vercel Hobby tier rate-limits aggressive pushes.** Burst-pushing 4–5 commits per session will hit the daily/hourly cap and silently stop deploying. Either batch commits before pushing or upgrade to Pro for an intensive build.
 
 ---
 
-## Days 3–6 (per plan file)
+## 2026-04-30 (cont.) — Day 3 B/C + Day 4: COMPLETE
 
-Reference [`~/.claude/plans/okay-we-need-to-floofy-hearth.md`](file:///C:/Users/james/.claude/plans/okay-we-need-to-floofy-hearth.md) § "Build Approach + Timeline" for the full week-by-week schedule. High-level:
+Continuing the same calendar day. Pattern emerged: **clickable mocks first, real persistence second.** Each new screen renders with realistic seed-shaped data so Spartan can react to the workflow shape; DB persistence + state-machine reducers come on Day 5+.
 
-- **Day 3:** SoV editor + sub pay-app portal foundations
-- **Day 4:** GC pay-app review + change order creation
-- **Day 5:** CO propagation (atomic) + drift detection invariants + AIA G702/G703 PDF generation
-- **Day 6:** Sworn statement + magic-link approvals + document vault + dogfooding fixes
+### Day 3 Phase B — what shipped (commit `30e8e4f`)
+
+- New `[id]/layout.tsx` — fetches project once, wraps every tab with shared header + tab nav.
+- `[id]/page.tsx` is the SoV editor (default tab): table + sticky totals + "Add line" form. Server action with zod validation, `revalidatePath` after insert.
+- `[id]/_components/project-tabs.tsx` — client component, `usePathname` for active state.
+- Subs and Documents tabs as informative placeholders.
+
+### Day 3 Phase C — what shipped (commit `fa0e9ca`)
+
+- Public route at `/sub-pay-app/[token]` (no Clerk auth — magic-link entry).
+- Mobile-first single-column form (Screen 6). Real ceiling-check visual when over contract; sticky footer with totals + Net to invoice.
+- Mock data shaped on seed fixture (Brothers & Bricks, project 215, March 2026, 5 SoV lines).
+- Save draft + Submit rendered but disabled with visible note.
+
+### Day 4 — what shipped (commit `0ab1d3e`)
+
+- **Screen 8 — Change Order creation** at `/projects/[id]/change-orders/new`:
+  - Two-column desktop: form (60%) + approval trail (40%).
+  - Form: CO number, sub dropdown (rescopes line options), description, dynamic line items table with add/remove, color-coded total impact, justification.
+  - Trail: vertical timeline visualizing Principal → Architect → Owner → Auto-propagated. Shows "Created" complete with rest pending.
+  - Mock data inspired by seed CO 215-CO-001 (B&B brick wall extension, +$34,700).
+- **Screen 7 — GC pay-app review** at `/projects/[id]/pay-apps/[payAppId]`:
+  - List view shows mocked submitted sub pay app with status badge.
+  - Review screen: line table with Sub % (locked) alongside GC adjusted % (editable, defaults to sub-reported). Reduce → row goes amber with "Reduced from X%" annotation; raise → blue. This period $ recomputes live.
+  - Footer summary: total this period / retention (10%) / net to approve.
+  - Mock data: seed sub pay app from B&B March 2026 (5 lines).
+
+### State of the site
+
+Local dev (Clerk dev mode) works end to end. Click paths Spartan can walk:
+- Sign in → /projects → create project → /projects/[id] (SoV editor)
+- Project tabs: SoV, Subs (placeholder), Pay Apps (mocked submission → review screen), Change Orders (empty state → draft form), Documents (placeholder)
+- `/sub-pay-app/anytoken` — sub portal mock (mobile-first)
+
+**Vercel is still rate-limited** as of 2026-04-30 evening. All new commits (Day 3 B/C, Day 4) are local-only. Pushing waits until the limit clears (or Pro upgrade) and the user is ready to demo.
+
+### Lessons burned in (Day 3 B/C + Day 4)
+
+11. **`(authenticated)` route group does not protect routes by URL** — Clerk middleware does. The route group only shares a layout; the protection is configured in `middleware.ts` via `createRouteMatcher`.
+12. **Public routes for magic-link entry** (e.g., `/sub-pay-app/...`) live OUTSIDE `(authenticated)` and are NOT in the protected matcher. This is the right shape for sub/architect/owner external access.
+13. **Clickable-mock pattern works well for Spartan-style review:** build the screen with seed-shaped mock data, real form interactions (computed totals, dynamic rows), buttons rendered-but-disabled with a visible "wired in a later session" note. This makes the workflow shape concrete without burning time on persistence prematurely.
+
+---
+
+## Day 5 — NEXT (the wedge feature, mostly)
+
+The differentiator of the entire product: **bi-directional CO propagation with drift detection.** Three sub-phases of varying depth.
+
+### Day 5 Phase A — Drift Dashboard (Screen 12 + Screen 2 stat card)
+
+The most visible "we're different" moment. Build as a clickable mock with seed-shaped drift examples so Spartan immediately sees the value.
+
+- New top-level route `/drift` (or wire the sidebar Drift Alerts item).
+- Drift Dashboard: list of alerts (severity icon + type label + project + brief). Each click → drift detail view (Screen 12) with "what's wrong" / "where the data is" / "how to fix" sections.
+- Stat-card surface on `/projects` dashboard (eventual Screen 2): "X drift alerts" with red badge.
+- Mocked alerts: example sub-above-ceiling, example CO not propagated, example pay-app rollup mismatch.
+
+### Day 5 Phase B — Atomic CO propagation (the real backend feature)
+
+When a `change_orders` row transitions to `approved`, in a single Postgres transaction:
+1. `subcontracts.current_amount += co.total_amount` (where `affected_subcontract_id`).
+2. For each `change_order_line`, `sov_lines.current_amount += delta_amount`.
+3. Insert `approval_events` row with `to_status='approved'`.
+4. If any step fails, rollback — no partial propagation.
+
+This requires:
+- Real CO + subcontract + sov_lines records to operate on (so Phase A drift mock can defer).
+- A state-machine reducer for ChangeOrder (`packages/domain/src/state-machines/change-order-reducer.ts`).
+- A server action that wraps the transition in `db.transaction`.
+
+### Day 5 Phase C — AIA G702/G703 PDF generation
+
+Use `@react-pdf/renderer` to produce the AIA G702 (cover sheet) + G703 (continuation sheet) PDFs from a `gc_to_owner` pay application. Lives in `packages/pdf`. Layout has to closely match the official AIA forms.
+
+This is a large standalone chunk — likely its own session.
+
+### Day 5 sequencing recommendation
+
+Build A first (highest visual impact for Spartan, no schema dependencies). Then either B (real propagation, requires data plumbing) or C (PDF, standalone). User picks based on demo priorities.
+
+---
+
+## Day 6 (per plan file)
+
+- Sworn statement (Screen 10) + magic-link approvals + document vault + dogfooding fixes
+- Reference [`~/.claude/plans/okay-we-need-to-floofy-hearth.md`](file:///C:/Users/james/.claude/plans/okay-we-need-to-floofy-hearth.md) § "Build Approach + Timeline" for the full schedule.
