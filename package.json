@@ -1,9 +1,9 @@
 {
-  "name": "constructor",
+  "name": "gc-monorepo",
   "private": true,
   "version": "0.0.1",
-  "description": "GC middleware — pay-app, change order, and reconciliation system",
-  "packageManager": "pnpm@9.15.0",
+  "description": "GC middleware — pay-app, change order, and reconciliation system (project codename: constructor)",
+  "packageManager": "pnpm@10.4.1",
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @constructor/web dev",

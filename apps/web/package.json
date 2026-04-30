@@ -12,10 +12,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@constructor/db": "workspace:*",
-    "@constructor/domain": "workspace:*",
-    "@constructor/pdf": "workspace:*",
-    "@constructor/ui": "workspace:*",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
