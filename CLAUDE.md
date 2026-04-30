@@ -1,6 +1,20 @@
-# construct-app — project conventions
+# constructor — project conventions
 
 This file is read into every Claude Code session that opens this repo. It overlays the user-level `~/.claude/CLAUDE.md` (terse, anti-mess, Whimsical-not-Mermaid, etc.).
+
+## Current build state — read first
+
+**Day 1 of MVP build COMPLETE** (2026-04-29). End-to-end Clerk → tenants sync verified on production (Vercel + Neon). Day 2 about to start.
+
+Single source of truth for current build state: [`docs/BUILD-STATUS.md`](./docs/BUILD-STATUS.md). **Read that before doing anything in code.**
+
+Key facts:
+- Repo: `https://github.com/james-falk/GC`. Local: this directory.
+- Production deploy: `https://gc-web-pink.vercel.app`.
+- Project codename: **constructor**. Root npm package: `gc-monorepo` (not `constructor` — that name is a JS reserved word and breaks pnpm). Sub-package scope: `@constructor/*` (this works fine because scoped names don't hit `Object.prototype`).
+- Two Drizzle migrations applied to Neon (`tenants` table with `clerk_org_id`).
+- Clerk webhook handler at `apps/web/src/app/api/webhooks/clerk/route.ts` — handles `organization.*` events, signature-verified via svix.
+- Env vars wired both locally (`apps/web/.env.local`) and on Vercel (Production + Preview + Development).
 
 ## What this project is
 
