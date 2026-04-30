@@ -18,12 +18,12 @@ export default async function Home() {
         </p>
 
         <div className="mt-10 flex items-center justify-center gap-3">
-          <SignInButton mode="modal">
+          <SignInButton mode="modal" fallbackRedirectUrl="/projects">
             <button className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-slate-50">
               Sign in
             </button>
           </SignInButton>
-          <SignUpButton mode="modal">
+          <SignUpButton mode="modal" fallbackRedirectUrl="/projects">
             <button className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800">
               Sign up
             </button>
