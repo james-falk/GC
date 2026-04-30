@@ -6,6 +6,6 @@
   "scripts": {
     "lint": "echo '(pdf lint stub)'",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "echo '(pdf no tests yet)'"
   }
 }

@@ -16,7 +16,7 @@
     "seed": "dotenv -e ../../apps/web/.env.local -- tsx src/seed/run.ts",
     "lint": "echo '(db lint stub)'",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "drizzle-orm": "^0.38.0",

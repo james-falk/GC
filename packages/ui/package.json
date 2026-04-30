@@ -6,6 +6,6 @@
   "scripts": {
     "lint": "echo '(ui lint stub)'",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "echo '(ui no tests yet)'"
   }
 }
