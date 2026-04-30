@@ -1,73 +1,168 @@
-import { notFound } from 'next/navigation';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
+import { addSovLine } from './actions';
 
-// Project detail. See gc-wireframes-brief.md § Screen 3.
-// Header is real; tab content is a placeholder until the SoV editor lands.
+// SoV editor — display table + add-line form. Default tab on the project
+// detail page. See gc-wireframes-brief.md § Screen 4.
+//
+// Phase B scope: read + add only. Deferred to a later pass: parent/child
+// hierarchy via parent_line_id, subcontractor chip per line, inline edit,
+// drift indicator, retention/stored-materials columns, "Import from contract".
+
+const inputClass =
+  'block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500';
 
 type PageProps = {
   params: Promise<{ id: string }>;
 };
 
-export default async function ProjectDetailPage({ params }: PageProps) {
-  const { id } = await params;
+export default async function ProjectSovPage({ params }: PageProps) {
+  const { id: projectId } = await params;
   const tenant = await getCurrentTenant();
 
-  const [project] = await db
+  const lines = await db
     .select()
-    .from(schema.projects)
-    .where(and(eq(schema.projects.id, id), eq(schema.projects.tenantId, tenant.id)))
-    .limit(1);
+    .from(schema.sovLines)
+    .where(
+      and(
+        eq(schema.sovLines.projectId, projectId),
+        eq(schema.sovLines.tenantId, tenant.id),
+      ),
+    )
+    .orderBy(asc(schema.sovLines.lineNumber));
 
-  if (!project) notFound();
+  const totals = lines.reduce(
+    (acc, l) => ({
+      contract: acc.contract + Number(l.contractAmount),
+      current: acc.current + Number(l.currentAmount),
+    }),
+    { contract: 0, current: 0 },
+  );
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <header className="border-b border-slate-200 pb-5">
-        <div className="text-xs uppercase tracking-wide text-slate-500">
-          Project #{project.projectNumber}
+    <div className="space-y-6">
+      <div className="flex items-baseline justify-between">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Schedule of Values</h2>
+          <p className="text-sm text-slate-600">
+            {lines.length === 0
+              ? 'No line items yet — add the first one below.'
+              : `${lines.length} line${lines.length === 1 ? '' : 's'}.`}
+          </p>
         </div>
-        <div className="mt-1 flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-            {project.status}
-          </span>
-        </div>
-        <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-4">
-          <div>
-            <dt className="text-slate-500">Original</dt>
-            <dd className="tabular-nums">${formatMoney(project.originalContractAmount)}</dd>
-          </div>
-          <div>
-            <dt className="text-slate-500">Owner</dt>
-            <dd className="text-slate-400">—</dd>
-          </div>
-          <div>
-            <dt className="text-slate-500">Architect</dt>
-            <dd className="text-slate-400">—</dd>
-          </div>
-          <div>
-            <dt className="text-slate-500">Status</dt>
-            <dd>{project.status}</dd>
-          </div>
-        </dl>
-      </header>
-
-      <div className="border-b border-slate-200">
-        <nav className="-mb-px flex gap-6">
-          <span className="border-b-2 border-blue-700 pb-2 text-sm font-medium text-blue-700">
-            SoV
-          </span>
-          <span className="pb-2 text-sm text-slate-400">Subs</span>
-          <span className="pb-2 text-sm text-slate-400">Pay Apps</span>
-          <span className="pb-2 text-sm text-slate-400">Change Orders</span>
-          <span className="pb-2 text-sm text-slate-400">Documents</span>
-        </nav>
       </div>
 
-      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-12 text-center">
-        <p className="text-sm text-slate-600">SoV editor lands next session.</p>
+      {lines.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-slate-200">
+          <table className="w-full border-separate border-spacing-0">
+            <thead>
+              <tr className="bg-slate-50 text-left">
+                <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Line #
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Description
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Original $
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Current $
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.id} className="hover:bg-slate-50">
+                  <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium text-slate-700 tabular-nums">
+                    {l.lineNumber}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-sm">{l.description}</td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-right text-sm tabular-nums">
+                    ${formatMoney(l.contractAmount)}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-right text-sm tabular-nums">
+                    ${formatMoney(l.currentAmount)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-slate-50 text-sm font-medium">
+                <td className="px-4 py-3" colSpan={2}>
+                  Totals
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  ${formatMoneyNumber(totals.contract)}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  ${formatMoneyNumber(totals.current)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+        <h3 className="text-sm font-semibold text-slate-900">Add line</h3>
+        <form action={addSovLine} className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-12">
+          <input type="hidden" name="projectId" value={projectId} />
+
+          <div className="sm:col-span-2">
+            <label htmlFor="lineNumber" className="block text-xs font-medium text-slate-700">
+              Line #
+            </label>
+            <input
+              id="lineNumber"
+              name="lineNumber"
+              required
+              maxLength={32}
+              placeholder="1"
+              className={inputClass + ' mt-1'}
+            />
+          </div>
+
+          <div className="sm:col-span-6">
+            <label htmlFor="description" className="block text-xs font-medium text-slate-700">
+              Description
+            </label>
+            <input
+              id="description"
+              name="description"
+              required
+              maxLength={500}
+              placeholder="e.g. Site work"
+              className={inputClass + ' mt-1'}
+            />
+          </div>
+
+          <div className="sm:col-span-3">
+            <label htmlFor="contractAmount" className="block text-xs font-medium text-slate-700">
+              Contract amount
+            </label>
+            <input
+              id="contractAmount"
+              name="contractAmount"
+              type="number"
+              min="0"
+              step="0.01"
+              required
+              placeholder="0.00"
+              className={inputClass + ' mt-1'}
+            />
+          </div>
+
+          <div className="flex items-end sm:col-span-1">
+            <button
+              type="submit"
+              className="w-full rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-800"
+            >
+              Add
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -75,6 +170,13 @@ export default async function ProjectDetailPage({ params }: PageProps) {
 
 function formatMoney(value: string) {
   return Number(value).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatMoneyNumber(value: number) {
+  return value.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
