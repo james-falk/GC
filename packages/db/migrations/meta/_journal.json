@@ -8,6 +8,13 @@
       "when": 1777513370599,
       "tag": "0000_friendly_wild_child",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777515332415,
+      "tag": "0001_smiling_peter_quill",
+      "breakpoints": true
     }
   ]
 }

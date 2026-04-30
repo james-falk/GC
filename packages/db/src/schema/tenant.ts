@@ -1,9 +1,11 @@
 import { pgTable, uuid, text, timestamp } from 'drizzle-orm/pg-core';
 
 // Top of the multi-tenant hierarchy. Every other entity carries tenant_id FK.
+// One row per Clerk Organization; clerk_org_id is the join key.
 // See docs/gc-data-model.md § Tenant.
 export const tenants = pgTable('tenants', {
   id: uuid('id').primaryKey().defaultRandom(),
+  clerkOrgId: text('clerk_org_id').notNull().unique(),
   name: text('name').notNull(),
   slug: text('slug').notNull().unique(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

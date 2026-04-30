@@ -17,6 +17,12 @@ importers:
       '@clerk/nextjs':
         specifier: ^6.12.0
         version: 6.39.3(next@15.5.15(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@constructor/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      drizzle-orm:
+        specifier: ^0.38.0
+        version: 0.38.4(@types/react@19.2.14)(postgres@3.4.9)(react@19.2.5)
       next:
         specifier: ^15.1.0
         version: 15.5.15(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -26,6 +32,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.5(react@19.2.5)
+      svix:
+        specifier: ^1.45.0
+        version: 1.92.2
     devDependencies:
       '@tailwindcss/postcss':
         specifier: ^4.0.0
@@ -2747,6 +2756,9 @@ packages:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
 
+  svix@1.92.2:
+    resolution: {integrity: sha512-ZmuA3UVvlnF9EgxlzmPtF7CKjQb64Z6OFlyfdDfU0sdcC7dJa+3aOYX5B9mA+RS6ch1AxBa4UP/l6KmqfGtWBQ==}
+
   swr@2.3.4:
     resolution: {integrity: sha512-bYd2lrhc+VarcpkgWclcUi92wYCpOgMws9Sd1hG1ntAu0NEy+14CbotuFjshBU2kt9rYj9TSmDcybpxpeTU1fg==}
     peerDependencies:
@@ -5456,6 +5468,10 @@ snapshots:
       has-flag: 4.0.0
 
   supports-preserve-symlinks-flag@1.0.0: {}
+
+  svix@1.92.2:
+    dependencies:
+      standardwebhooks: 1.0.0
 
   swr@2.3.4(react@19.2.5):
     dependencies:
