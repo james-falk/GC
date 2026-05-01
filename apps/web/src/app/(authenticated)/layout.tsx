@@ -15,7 +15,7 @@ const NAV: Array<{
 }> = [
   { label: 'Dashboard', href: '/dashboard', enabled: false },
   { label: 'Projects', href: '/projects', enabled: true },
-  { label: 'Subcontractors', href: '/subcontractors', enabled: false },
+  { label: 'Subcontractors', href: '/subcontractors', enabled: true },
   { label: 'Pay Apps', href: '/pay-apps', enabled: false },
   { label: 'Change Orders', href: '/change-orders', enabled: false },
   { label: 'Documents', href: '/documents', enabled: false },
