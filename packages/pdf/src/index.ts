@@ -3,3 +3,5 @@
 
 export { AiaG702 } from './aia-g702';
 export type { AiaG702Data } from './aia-g702';
+export { SwornStatement } from './sworn-statement';
+export type { SwornStatementData, SwornStatementLine } from './sworn-statement';

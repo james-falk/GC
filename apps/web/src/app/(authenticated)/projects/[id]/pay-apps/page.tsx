@@ -44,12 +44,20 @@ export default async function ProjectPayAppsPage({ params }: PageProps) {
             this period.
           </p>
         </div>
-        <Link
-          href={`/projects/${projectId}/pay-apps/aia`}
-          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-        >
-          View AIA pay app →
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            href={`/projects/${projectId}/pay-apps/sworn-statement`}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            Sworn statement →
+          </Link>
+          <Link
+            href={`/projects/${projectId}/pay-apps/aia`}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            AIA pay app →
+          </Link>
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200">

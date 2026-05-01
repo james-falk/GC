@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./aia-g702": "./src/aia-g702.tsx"
+    "./aia-g702": "./src/aia-g702.tsx",
+    "./sworn-statement": "./src/sworn-statement.tsx"
   },
   "scripts": {
     "lint": "echo '(pdf lint stub)'",
