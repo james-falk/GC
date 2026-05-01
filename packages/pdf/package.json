@@ -3,9 +3,23 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./aia-g702": "./src/aia-g702.tsx"
+  },
   "scripts": {
     "lint": "echo '(pdf lint stub)'",
     "typecheck": "tsc --noEmit",
     "test": "echo '(pdf no tests yet)'"
+  },
+  "dependencies": {
+    "@react-pdf/renderer": "^4.1.5",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.2"
   }
 }

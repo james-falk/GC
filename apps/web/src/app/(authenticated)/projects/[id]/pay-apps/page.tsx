@@ -36,12 +36,20 @@ export default async function ProjectPayAppsPage({ params }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold tracking-tight">Pay Apps</h2>
-        <p className="text-sm text-slate-600">
-          Sub → GC submissions awaiting review, plus GC → Owner pay apps for
-          this period.
-        </p>
+      <div className="flex items-baseline justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Pay Apps</h2>
+          <p className="text-sm text-slate-600">
+            Sub → GC submissions awaiting review, plus GC → Owner pay apps for
+            this period.
+          </p>
+        </div>
+        <Link
+          href={`/projects/${projectId}/pay-apps/aia`}
+          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+        >
+          View AIA pay app →
+        </Link>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
