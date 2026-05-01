@@ -4,13 +4,13 @@ This file is read into every Claude Code session that opens this repo. It overla
 
 ## Current build state — read first
 
-**Day 2 + Day 3 Phase A COMPLETE** (2026-04-30). Schema (15 tables) on Neon, Clerk user/org webhooks live, domain scaffolding + first invariant landed, authenticated app shell + projects list + create flow shipped. Day 3 Phase B (SoV editor) is next.
+**Days 1–6 of the MVP plan SHIPPED** (2026-04-30, all live in prod). Now mid-flight on the **backend persistence pass** — converting clickable mocks into real CRUD, starting with subcontractors. **Subcontractors directory shipped; per-project subcontracts NOT YET — that's the next step.**
 
-Single source of truth for current build state: [`docs/BUILD-STATUS.md`](./docs/BUILD-STATUS.md). **Read that before doing anything in code** — including the lessons-burned-in section.
+Single source of truth for current build state: [`docs/BUILD-STATUS.md`](./docs/BUILD-STATUS.md). **Read that before doing anything in code** — especially the "What's NOT YET DONE in this pass — pickup point" section, and the lessons-burned-in.
 
 Key facts:
 - Repo: `https://github.com/james-falk/GC`. Local: this directory.
-- Production deploy: `https://gc-web-pink.vercel.app` (currently stale — Vercel Hobby rate limit hit 2026-04-30; clears overnight or upgrade to Pro).
+- Production deploy: `https://gc-web-pink.vercel.app` (live; Days 1–6 are deployed at SHA `0741bdf`. The WIP subcontractors-top-level commit is local-only — not yet pushed).
 - Project codename: **constructor**. Root npm package: `gc-monorepo` (not `constructor` — that name is a JS reserved word and breaks pnpm). Sub-package scope: `@constructor/*` (this works fine because scoped names don't hit `Object.prototype`).
 - Three Drizzle migrations applied to Neon: `0000` tenants, `0001` clerk_org_id, `0002` 14 entities + 11 enums, `0003` users.role nullable.
 - Clerk webhook handler at `apps/web/src/app/api/webhooks/clerk/route.ts` — handles `organization.*` and `user.*` events, signature-verified via svix.

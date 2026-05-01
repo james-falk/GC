@@ -155,45 +155,86 @@ Local dev (Clerk dev mode) works end to end. Click paths Spartan can walk:
 
 ---
 
-## Day 5 — NEXT (the wedge feature, mostly)
+## 2026-04-30 (cont.) — Day 5 + Day 6: COMPLETE
 
-The differentiator of the entire product: **bi-directional CO propagation with drift detection.** Three sub-phases of varying depth.
+All clickable surfaces from the wireframe brief are now built (mostly as clickable mocks against seed-shaped data; the SoV editor and project CRUD are real).
 
-### Day 5 Phase A — Drift Dashboard (Screen 12 + Screen 2 stat card)
+### Day 5 — what shipped
 
-The most visible "we're different" moment. Build as a clickable mock with seed-shaped drift examples so Spartan immediately sees the value.
+| Phase | Commit | What |
+|---|---|---|
+| 5A | `b620adc` | Drift Dashboard list + detail (Screens 2 stat card + 12). Three example alerts shaped on the seed: sub-above-ceiling, CO-not-propagated, pay-app-rollup-mismatch. Sidebar nav has red badge for high-severity count. |
+| 5C | `e984500` | AIA G702 cover sheet PDF generation, end-to-end. `packages/pdf` ships `@react-pdf/renderer` + `AiaG702` component. API route `/api/aia-pay-app/[payAppId]` returns real PDF. Screen 9 preview at `/projects/[id]/pay-apps/aia` with iframe + metadata sidebar + status flow + working Download button. |
 
-- New top-level route `/drift` (or wire the sidebar Drift Alerts item).
-- Drift Dashboard: list of alerts (severity icon + type label + project + brief). Each click → drift detail view (Screen 12) with "what's wrong" / "where the data is" / "how to fix" sections.
-- Stat-card surface on `/projects` dashboard (eventual Screen 2): "X drift alerts" with red badge.
-- Mocked alerts: example sub-above-ceiling, example CO not propagated, example pay-app rollup mismatch.
+5B (atomic CO propagation backend) was deliberately deferred — needs real data flowing, blocked on subcontract persistence.
 
-### Day 5 Phase B — Atomic CO propagation (the real backend feature)
+### Day 6 — what shipped
 
-When a `change_orders` row transitions to `approved`, in a single Postgres transaction:
-1. `subcontracts.current_amount += co.total_amount` (where `affected_subcontract_id`).
-2. For each `change_order_line`, `sov_lines.current_amount += delta_amount`.
-3. Insert `approval_events` row with `to_status='approved'`.
-4. If any step fails, rollback — no partial propagation.
+| Phase | Commit | What |
+|---|---|---|
+| 6A | `c9c1ae5` | Sworn Statement PDF + Screen 10 preview. `SwornStatement` component in `packages/pdf` with credible affidavit layout (subs table, signature blocks, notarization block). API route `/api/sworn-statement/[id]`. Preview page mirrors the AIA preview shape. |
+| 6B+C | `0741bdf` | External magic-link approval (Screen 11) at public route `/approve/[token]` — Stripe-style minimalism, embedded PDF, Approve/Request Changes with client-side success state. Document Vault (Documents tab) replaces placeholder with real list view, type chips, drag-drop zone, 8 mocked entries. Subs tab (dogfood) replaced with mocked list of 8 subs from seed. |
 
-This requires:
-- Real CO + subcontract + sov_lines records to operate on (so Phase A drift mock can defer).
-- A state-machine reducer for ChangeOrder (`packages/domain/src/state-machines/change-order-reducer.ts`).
-- A server action that wraps the transition in `db.transaction`.
+### State of the site (live in production)
 
-### Day 5 Phase C — AIA G702/G703 PDF generation
+**All 9 commits pushed to `origin/main` and deployed to [`gc-web-pink.vercel.app`](https://gc-web-pink.vercel.app)** (Vercel rate limit cleared). Latest deploy: `dpl_9Z5Gjq2F49LHg4QkKFxF9sJJecP1` for SHA `0741bdf`. CI green ([run 25199398286](https://github.com/james-falk/GC/actions/runs/25199398286)).
 
-Use `@react-pdf/renderer` to produce the AIA G702 (cover sheet) + G703 (continuation sheet) PDFs from a `gc_to_owner` pay application. Lives in `packages/pdf`. Layout has to closely match the official AIA forms.
+Spartan-walkable click paths:
+- **GC side** (auth): /projects → create → SoV editor (real, persists) → 5 tabs all show real-feeling content. Drift Alerts in sidebar with 2 high-severity badge.
+- **Sub side**: `/sub-pay-app/anytoken` (mobile portal mock).
+- **External approver**: `/approve/anytoken` (Stripe-style, embeds AIA PDF).
+- **Real PDFs**: AIA G702 + Sworn Statement download server-rendered from `/api/...` routes.
 
-This is a large standalone chunk — likely its own session.
+### Lessons burned in (Day 5 + Day 6)
 
-### Day 5 sequencing recommendation
-
-Build A first (highest visual impact for Spartan, no schema dependencies). Then either B (real propagation, requires data plumbing) or C (PDF, standalone). User picks based on demo priorities.
+14. **Node `Buffer` ≠ `BodyInit`.** `@react-pdf/renderer`'s `renderToBuffer` returns a Node Buffer; wrap in `new Uint8Array(buffer)` before passing to `NextResponse` or TS rejects it.
+15. **API routes that return JSX-rendered content must be `.tsx`, not `.ts`.** PDF generation routes use `<AiaG702 data={...} />` syntax.
+16. **`packages/pdf` needs `"jsx": "react-jsx"` in tsconfig** — it doesn't extend the apps/web tsconfig and the base tsconfig is JSX-free.
 
 ---
 
-## Day 6 (per plan file)
+## 2026-05-01 — Backend persistence pass: STARTED
 
-- Sworn statement (Screen 10) + magic-link approvals + document vault + dogfooding fixes
-- Reference [`~/.claude/plans/okay-we-need-to-floofy-hearth.md`](file:///C:/Users/james/.claude/plans/okay-we-need-to-floofy-hearth.md) § "Build Approach + Timeline" for the full schedule.
+After Day 6, kicked off the post-MVP backend pass — converting clickable mocks into real persistence. **Bottom of the dependency chain first: subcontractors → subcontracts → SoV linkage → CO real data → pay-app real data.**
+
+User decisions captured:
+- **No demo data seeding** — every tenant starts empty; users populate via the UI.
+- **Minimal fields, expand later** — avoid over-building; add detail when Spartan asks for it.
+- **Push only on explicit instruction** — local commits as checkpoints, push when ready to demo.
+
+### What shipped (commit at HEAD)
+
+**Subcontractors top-level** (`/subcontractors`):
+- `apps/web/src/app/(authenticated)/subcontractors/page.tsx` — tenant-scoped list with name / email / phone / address columns. Empty state CTA.
+- `apps/web/src/app/(authenticated)/subcontractors/new/page.tsx` — minimal create form (only `name` required; email/phone/address optional).
+- `apps/web/src/app/(authenticated)/subcontractors/actions.ts` — zod-validated `createSubcontractor` server action.
+- `apps/web/src/app/(authenticated)/layout.tsx` — Subcontractors sidebar nav item enabled.
+
+Schema is unchanged — uses the existing `subcontractors` table from migration `0002`. Empty-string-to-undefined coercion in zod so optional fields with empty inputs don't fail validation.
+
+### What's NOT YET DONE in this pass — pickup point
+
+1. **Per-project Subs tab — real data.** `apps/web/src/app/(authenticated)/projects/[id]/subs/page.tsx` is currently a mocked list (8 hardcoded subs from the seed fixture). Replace with a tenant-scoped query that joins `subcontracts` to `subcontractors` for the current project. Show real billed-to-date and CO impact (both will be $0 until pay apps and COs persist).
+2. **"Add subcontract" form on the Subs tab.** New route `/projects/[id]/subs/new` (or inline modal). Fields: subcontractor (dropdown reading from directory), contract number, original amount, status. Defer spec sections, inclusions, exclusions, signed-contract attachment per "minimal fields" decision.
+3. **SoV editor's add-line form gets an optional subcontract dropdown.** `apps/web/src/app/(authenticated)/projects/[id]/page.tsx` add-line form currently has line #, description, contract amount. Add an optional subcontract picker so each SoV line can be associated with a real subcontract.
+4. **CO form's subcontract dropdown reads from real data.** `apps/web/src/app/(authenticated)/projects/[id]/change-orders/new/page.tsx` currently passes hardcoded mock `subOptions` to the `COForm` client component. Replace with a query against real subcontracts for the project.
+
+After step 4, real CO drafts can persist (next sub-step of the backend pass — the state-machine reducer + atomic propagation transaction).
+
+### Pickup-point summary for the next session
+
+Continue the backend pass at step 1 above (per-project Subs tab → real data). The Subcontractors directory at `/subcontractors` is shipped; users can already add directory entries that the next step will consume. Typecheck was clean at the time of this checkpoint.
+
+---
+
+## What comes after the backend pass (rough sketch)
+
+- **Pay-application real persistence** (sub portal real submit, GC review real approval).
+- **Magic-link verification** (real flow at `/approve/[token]` and `/sub-pay-app/[token]` instead of mocks).
+- **Atomic CO propagation transaction** (the wedge feature working real).
+- **R2 file uploads** replacing Document Vault mock.
+- **Resend email** for magic-link delivery + pay-app notifications.
+- **Sentry** for production error tracking.
+- **Real drift detection** running pure-function invariants against live data on a schedule + write-time.
+
+Reference [`~/.claude/plans/okay-we-need-to-floofy-hearth.md`](file:///C:/Users/james/.claude/plans/okay-we-need-to-floofy-hearth.md) § "Build Approach + Timeline" for the original 6-week MVP schedule.
