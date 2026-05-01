@@ -1,17 +1,30 @@
 import Link from 'next/link';
 import { OrganizationSwitcher, UserButton } from '@clerk/nextjs';
+import { MOCK_ALERTS } from './drift/_data/mock-alerts';
 
 // App shell — top bar + left sidebar nav. See gc-wireframes-brief.md § Screen 1.
 // Most nav items are placeholders until their feature lands.
 
-const NAV: Array<{ label: string; href: string; enabled: boolean }> = [
+const driftHighCount = MOCK_ALERTS.filter((a) => a.severity === 'high').length;
+
+const NAV: Array<{
+  label: string;
+  href: string;
+  enabled: boolean;
+  badge?: number;
+}> = [
   { label: 'Dashboard', href: '/dashboard', enabled: false },
   { label: 'Projects', href: '/projects', enabled: true },
   { label: 'Subcontractors', href: '/subcontractors', enabled: false },
   { label: 'Pay Apps', href: '/pay-apps', enabled: false },
   { label: 'Change Orders', href: '/change-orders', enabled: false },
   { label: 'Documents', href: '/documents', enabled: false },
-  { label: 'Drift Alerts', href: '/drift', enabled: false },
+  {
+    label: 'Drift Alerts',
+    href: '/drift',
+    enabled: true,
+    badge: driftHighCount,
+  },
   { label: 'Settings', href: '/settings', enabled: false },
 ];
 
@@ -43,9 +56,14 @@ export default function AuthenticatedLayout({
                 <Link
                   key={item.href}
                   href={item.href}
-                  className="rounded px-3 py-2 text-sm font-medium text-slate-900 transition hover:bg-slate-200"
+                  className="flex items-center justify-between rounded px-3 py-2 text-sm font-medium text-slate-900 transition hover:bg-slate-200"
                 >
-                  {item.label}
+                  <span>{item.label}</span>
+                  {item.badge !== undefined && item.badge > 0 && (
+                    <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-600 px-1.5 text-[10px] font-semibold text-white">
+                      {item.badge}
+                    </span>
+                  )}
                 </Link>
               ) : (
                 <span
