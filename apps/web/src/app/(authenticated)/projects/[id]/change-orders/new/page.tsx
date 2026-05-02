@@ -129,6 +129,7 @@ export default async function NewChangeOrderPage({ params }: PageProps) {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
           <div className="lg:col-span-3">
             <COForm
+              projectId={projectId}
               coNumberSuggestion="CO-001"
               subOptions={subOptions}
               initialRows={[]}

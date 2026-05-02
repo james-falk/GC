@@ -1,12 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
+import { saveCoDraft } from '../../actions';
 
 // Change Order form. See gc-wireframes-brief.md § Screen 8.
 //
-// Phase A scope: all fields render and interact, totals compute live, but
-// Save Draft + Submit are wired in a later session. The lines table supports
-// add + remove + edit; line dropdown is scoped to the chosen subcontract.
+// Save Draft now persists to the DB via the saveCoDraft server action.
+// Submit-for-approval (the Principal -> Architect -> Owner chain) remains
+// not-yet-wired and is hidden until the magic-link flow lands. For the
+// MVP wedge demo, PMs draft a CO here and approve it from the CO list.
 
 type LineOption = {
   id: string;
@@ -28,6 +30,7 @@ type Row = {
 };
 
 type Props = {
+  projectId: string;
   coNumberSuggestion: string;
   subOptions: SubOption[];
   initialRows: Row[];
@@ -39,6 +42,8 @@ export function COForm(props: Props) {
   const [description, setDescription] = useState('');
   const [justification, setJustification] = useState('');
   const [rows, setRows] = useState<Row[]>(props.initialRows);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   const activeSub = props.subOptions.find((s) => s.id === subId);
   const lineOptions = activeSub?.lines ?? [];
@@ -242,28 +247,68 @@ export function COForm(props: Props) {
       </div>
 
       {/* Buttons */}
-      <div className="flex gap-3 border-t border-slate-200 pt-5">
-        <button
-          type="button"
-          disabled
-          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-400"
-        >
-          Save draft
-        </button>
-        <button
-          type="button"
-          disabled
-          className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white opacity-60"
-        >
-          Submit for approval
-        </button>
+      <div className="space-y-3 border-t border-slate-200 pt-5">
+        {error && (
+          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+            {error}
+          </div>
+        )}
+        <div className="flex gap-3">
+          <button
+            type="button"
+            disabled={pending || rows.length === 0 || !description.trim()}
+            onClick={handleSaveDraft}
+            className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800 disabled:opacity-50"
+          >
+            {pending ? 'Saving…' : 'Save draft'}
+          </button>
+        </div>
+        <p className="text-[11px] text-slate-400">
+          Submit-for-approval (Principal → Architect → Owner chain) lands when
+          magic-link external approval is wired. For now, drafts go to the CO
+          list where they can be approved directly to demo the propagation.
+        </p>
       </div>
-      <p className="text-[11px] text-slate-400">
-        Save draft and submit are wired in a later session — for now this is a
-        clickable mock so the shape is visible.
-      </p>
     </form>
   );
+
+  async function handleSaveDraft() {
+    setError(null);
+    if (rows.some((r) => !r.sovLineId)) {
+      setError('Every line item needs a SoV line selected.');
+      return;
+    }
+    if (rows.some((r) => r.delta === '' || Number.isNaN(Number(r.delta)))) {
+      setError('Every line item needs a delta amount.');
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        await saveCoDraft({
+          projectId: props.projectId,
+          coNumber: coNumber.trim(),
+          description: description.trim(),
+          justification: justification.trim() || undefined,
+          affectedSubcontractId: subId || undefined,
+          lines: rows.map((r) => ({
+            sovLineId: r.sovLineId,
+            deltaAmount: r.delta.trim(),
+            reason: r.reason.trim() || undefined,
+          })),
+        });
+        // saveCoDraft redirects on success — control doesn't return here.
+      } catch (e) {
+        // redirect() throws a special error Next.js handles internally; our
+        // try/catch only sees real failures. Surface a friendly message.
+        const message =
+          e instanceof Error ? e.message : 'Failed to save draft';
+        // Don't show Next's internal redirect "error" as a user-facing string.
+        if (message.includes('NEXT_REDIRECT')) return;
+        setError(message);
+      }
+    });
+  }
 }
 
 function formatMoney(value: number): string {
