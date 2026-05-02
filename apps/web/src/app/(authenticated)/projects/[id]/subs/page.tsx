@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { and, asc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
@@ -73,14 +74,12 @@ export default async function ProjectSubsPage({ params }: PageProps) {
             current contract minus billed.
           </p>
         </div>
-        <button
-          type="button"
-          disabled
-          className="rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white opacity-60"
-          title="Coming in the next step of the backend pass"
+        <Link
+          href={`/projects/${projectId}/subs/new`}
+          className="rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-800"
         >
           + Add subcontract
-        </button>
+        </Link>
       </div>
 
       {rows.length === 0 ? (
@@ -88,10 +87,12 @@ export default async function ProjectSubsPage({ params }: PageProps) {
           <p className="text-sm font-medium text-slate-700">
             No subcontracts on this project yet.
           </p>
-          <p className="mt-1 text-xs text-slate-500">
-            The &ldquo;Add subcontract&rdquo; form lands in the next step of the
-            backend persistence pass.
-          </p>
+          <Link
+            href={`/projects/${projectId}/subs/new`}
+            className="mt-4 inline-block rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800"
+          >
+            + Add the first subcontract
+          </Link>
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-slate-200">
