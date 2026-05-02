@@ -3,7 +3,8 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
+import { approveChangeOrderDirect } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { ensureCurrentUser } from '@/lib/user';
@@ -139,4 +140,125 @@ export async function saveCoDraft(input: SaveCoDraftPayload): Promise<void> {
 
   revalidatePath(`/projects/${parsed.projectId}/change-orders`);
   redirect(`/projects/${parsed.projectId}/change-orders`);
+}
+
+// approveChangeOrder — the wedge feature.
+//
+// On owner approval (here shortcut to PM-direct for MVP demo before the
+// magic-link chain is wired), the system in a SINGLE Postgres transaction:
+//   1. Updates CO.status to 'approved' + sets approvedAt.
+//   2. Increments subcontracts.current_amount by CO.total_amount (when an
+//      affected subcontract is set).
+//   3. For every CO line, increments sov_lines.current_amount by
+//      delta_amount.
+//   4. Inserts an approval_events row (the audit trail).
+// If any step fails, the entire transaction rolls back. The CO stays
+// in 'draft' and no subcontract or SoV row sees a partial update.
+//
+// The state-machine reducer in @constructor/domain owns the
+// is-this-transition-legal check; SQL only happens after the reducer
+// says yes. See gc-data-model.md § Invariant #4.
+
+const ApproveChangeOrderInput = z.object({
+  changeOrderId: z.string().uuid(),
+  projectId: z.string().uuid(),
+});
+
+export async function approveChangeOrder(formData: FormData): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = ApproveChangeOrderInput.parse({
+    changeOrderId: formData.get('changeOrderId'),
+    projectId: formData.get('projectId'),
+  });
+
+  // Read the CO inside the tenant scope.
+  const [co] = await db
+    .select({
+      id: schema.changeOrders.id,
+      projectId: schema.changeOrders.projectId,
+      status: schema.changeOrders.status,
+      totalAmount: schema.changeOrders.totalAmount,
+      affectedSubcontractId: schema.changeOrders.affectedSubcontractId,
+    })
+    .from(schema.changeOrders)
+    .where(
+      and(
+        eq(schema.changeOrders.id, parsed.changeOrderId),
+        eq(schema.changeOrders.projectId, parsed.projectId),
+        eq(schema.changeOrders.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!co) throw new Error('Change order not found');
+
+  // The state machine guards the transition. We map the DB enum value
+  // into the domain state shape; only the discriminator matters here.
+  const transition = approveChangeOrderDirect({
+    kind: co.status as 'draft',
+  });
+  if (!transition.ok) {
+    throw new Error(transition.error);
+  }
+
+  // Read every line item so we can apply each delta to its SoV line.
+  const lines = await db
+    .select({
+      sovLineId: schema.changeOrderLines.sovLineId,
+      deltaAmount: schema.changeOrderLines.deltaAmount,
+    })
+    .from(schema.changeOrderLines)
+    .where(eq(schema.changeOrderLines.changeOrderId, co.id));
+
+  if (lines.length === 0) {
+    throw new Error('Change order has no line items — cannot approve');
+  }
+
+  await db.transaction(async (tx) => {
+    // 1. Flip the CO to approved.
+    await tx
+      .update(schema.changeOrders)
+      .set({
+        status: 'approved',
+        approvedAt: new Date(),
+      })
+      .where(eq(schema.changeOrders.id, co.id));
+
+    // 2. Increment the affected subcontract's current_amount, if any.
+    if (co.affectedSubcontractId) {
+      await tx
+        .update(schema.subcontracts)
+        .set({
+          currentAmount: sql`${schema.subcontracts.currentAmount} + ${co.totalAmount}`,
+        })
+        .where(eq(schema.subcontracts.id, co.affectedSubcontractId));
+    }
+
+    // 3. Increment each affected SoV line by its delta.
+    for (const line of lines) {
+      await tx
+        .update(schema.sovLines)
+        .set({
+          currentAmount: sql`${schema.sovLines.currentAmount} + ${line.deltaAmount}`,
+        })
+        .where(eq(schema.sovLines.id, line.sovLineId));
+    }
+
+    // 4. Audit row.
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'change_order',
+      entityId: co.id,
+      fromStatus: 'draft',
+      toStatus: 'approved',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: 'PM-direct approval (MVP demo path; magic-link chain TBD)',
+    });
+  });
+
+  // Refresh the surfaces that show derived values.
+  revalidatePath(`/projects/${parsed.projectId}`); // SoV editor
+  revalidatePath(`/projects/${parsed.projectId}/subs`); // Subs tab
+  revalidatePath(`/projects/${parsed.projectId}/change-orders`); // CO list
 }

@@ -20,6 +20,9 @@ importers:
       '@constructor/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@constructor/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@constructor/pdf':
         specifier: workspace:*
         version: link:../../packages/pdf
