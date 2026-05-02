@@ -28,3 +28,59 @@ export function approveChangeOrderDirect(
   }
   return { ok: true, nextState: { kind: 'approved', at: now } };
 }
+
+// Owner approves via magic-link. Legal from `pending_owner` only.
+// This is the transition that triggers atomic propagation — the SQL
+// transaction runs only after this returns ok.
+export function ownerApproveChangeOrder(
+  state: ChangeOrderState,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (state.kind !== 'pending_owner') {
+    return {
+      ok: false,
+      error: `cannot owner-approve from state '${state.kind}' — must be 'pending_owner'`,
+    };
+  }
+  return { ok: true, nextState: { kind: 'approved', at: now } };
+}
+
+// Owner rejects via magic-link. Legal from `pending_owner` only.
+// Comment is required by the state-machine spec.
+export function ownerRejectChangeOrder(
+  state: ChangeOrderState,
+  comment: string,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (state.kind !== 'pending_owner') {
+    return {
+      ok: false,
+      error: `cannot owner-reject from state '${state.kind}' — must be 'pending_owner'`,
+    };
+  }
+  if (!comment.trim()) {
+    return { ok: false, error: 'rejection comment is required' };
+  }
+  return { ok: true, nextState: { kind: 'owner_rejected', comment, at: now } };
+}
+
+// PM clicks "Send approval link" on a draft CO — for the MVP magic-link
+// demo we skip the Principal + Architect intermediate steps and route the
+// link straight to the owner. When the full chain lands, this transitions
+// to pending_principal first; for now it goes straight to pending_owner.
+export function sendDraftToOwner(
+  state: ChangeOrderState,
+  magicLinkId: string,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (state.kind !== 'draft') {
+    return {
+      ok: false,
+      error: `cannot send to owner from state '${state.kind}' — must be 'draft'`,
+    };
+  }
+  return {
+    ok: true,
+    nextState: { kind: 'pending_owner', magicLinkId, at: now },
+  };
+}

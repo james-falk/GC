@@ -4,10 +4,14 @@ import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { approveChangeOrderDirect } from '@constructor/domain';
+import {
+  approveChangeOrderDirect,
+  sendDraftToOwner,
+} from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { ensureCurrentUser } from '@/lib/user';
+import { generateRawToken, hashToken } from '@/lib/magic-link';
 
 // Server actions for the ChangeOrder workflow.
 //
@@ -261,4 +265,90 @@ export async function approveChangeOrder(formData: FormData): Promise<void> {
   revalidatePath(`/projects/${parsed.projectId}`); // SoV editor
   revalidatePath(`/projects/${parsed.projectId}/subs`); // Subs tab
   revalidatePath(`/projects/${parsed.projectId}/change-orders`); // CO list
+}
+
+// sendApprovalLink — generate a single-use, time-bound magic-link that an
+// external owner can click to approve or reject this CO without an account.
+//
+// MVP scope: skips Principal + Architect intermediate steps; the link goes
+// straight to the owner. Real flow with the full chain layers on later.
+//
+// Generates a 256-bit random token, stores only its SHA-256 hash, and
+// transitions the CO to pending_owner inside a single transaction so the
+// state and the link are consistent. Default expiry 72 hours per the
+// state-machine spec.
+
+const SendApprovalLinkInput = z.object({
+  changeOrderId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  recipientEmail: z.string().trim().email().max(200),
+});
+
+const MAGIC_LINK_TTL_HOURS = 72;
+
+export async function sendApprovalLink(formData: FormData): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const parsed = SendApprovalLinkInput.parse({
+    changeOrderId: formData.get('changeOrderId'),
+    projectId: formData.get('projectId'),
+    recipientEmail: formData.get('recipientEmail'),
+  });
+
+  // Read the CO inside the tenant scope and confirm it's eligible.
+  const [co] = await db
+    .select({
+      id: schema.changeOrders.id,
+      status: schema.changeOrders.status,
+    })
+    .from(schema.changeOrders)
+    .where(
+      and(
+        eq(schema.changeOrders.id, parsed.changeOrderId),
+        eq(schema.changeOrders.projectId, parsed.projectId),
+        eq(schema.changeOrders.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!co) throw new Error('Change order not found');
+
+  // Reducer guards the transition; we only insert if the move is legal.
+  // A magicLinkId placeholder is fine here — the reducer doesn't read it,
+  // it just propagates it into the next state shape.
+  const transition = sendDraftToOwner(
+    { kind: co.status as 'draft' },
+    'pending-insert',
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  const rawToken = generateRawToken();
+  const tokenHash = hashToken(rawToken);
+  const expiresAt = new Date(
+    Date.now() + MAGIC_LINK_TTL_HOURS * 60 * 60 * 1000,
+  );
+
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.magicLinks).values({
+      tenantId: tenant.id,
+      targetEntityType: 'change_order',
+      targetEntityId: co.id,
+      recipientEmail: parsed.recipientEmail,
+      recipientRole: 'owner',
+      tokenHash,
+      action: 'approve_or_reject',
+      expiresAt,
+    });
+
+    await tx
+      .update(schema.changeOrders)
+      .set({ status: 'pending_owner' })
+      .where(eq(schema.changeOrders.id, co.id));
+  });
+
+  // Surface the raw token to the requester via revalidatePath + a query
+  // param on the redirect target. Email delivery (Resend) lands later;
+  // for now the URL is shown in-app so the user can click it themselves.
+  revalidatePath(`/projects/${parsed.projectId}/change-orders`);
+  redirect(
+    `/projects/${parsed.projectId}/change-orders?token=${rawToken}&coId=${co.id}`,
+  );
 }

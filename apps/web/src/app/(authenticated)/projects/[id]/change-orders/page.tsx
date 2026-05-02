@@ -2,15 +2,19 @@ import Link from 'next/link';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
-import { approveChangeOrder } from './actions';
+import { resolveBaseUrl } from '@/lib/magic-link';
+import { approveChangeOrder, sendApprovalLink } from './actions';
 
-// Change Orders tab — real list scoped to this project. See gc-wireframes-brief.md
-// § Screen 8.
+// Change Orders tab — real list scoped to this project.
+// See gc-wireframes-brief.md § Screen 8.
 //
-// Wedge feature: each draft CO has an Approve button that fires the atomic
-// propagation transaction. On success, the affected subcontract's
-// current_amount + each affected SoV line's current_amount jump in lockstep
-// with the new approved status — all-or-nothing.
+// Two approval paths from this page:
+//   1. PM-direct "Approve & propagate" — dev shortcut bypassing the
+//      magic-link chain. Triggers the atomic propagation transaction.
+//   2. "Send approval link" — generates a single-use magic-link with the
+//      target owner's email; CO transitions to pending_owner. The owner
+//      clicks the link, lands on /approve/[token], approves there. Same
+//      atomic propagation runs on the consumer side.
 
 const STATUS_STYLES: Record<string, string> = {
   draft: 'bg-slate-100 text-slate-700',
@@ -25,14 +29,17 @@ const STATUS_STYLES: Record<string, string> = {
 
 type PageProps = {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ token?: string; coId?: string }>;
 };
 
-export default async function ProjectChangeOrdersPage({ params }: PageProps) {
+export default async function ProjectChangeOrdersPage({
+  params,
+  searchParams,
+}: PageProps) {
   const { id: projectId } = await params;
+  const { token, coId } = await searchParams;
   const tenant = await getCurrentTenant();
 
-  // Read each CO joined to its (optional) affected subcontract +
-  // subcontractor for display.
   const cos = await db
     .select({
       id: schema.changeOrders.id,
@@ -62,6 +69,15 @@ export default async function ProjectChangeOrdersPage({ params }: PageProps) {
     )
     .orderBy(desc(schema.changeOrders.createdAt), asc(schema.changeOrders.coNumber));
 
+  // Banner content for a freshly-generated magic-link URL. We don't store
+  // raw tokens (only their SHA-256 hashes), so this is the only moment the
+  // URL is recoverable. If the user navigates away they need to re-send to
+  // regenerate; the old link stays valid until consumed or expired.
+  const bannerUrl =
+    token && coId && /^[a-f0-9]{64}$/.test(token)
+      ? `${resolveBaseUrl()}/approve/${token}`
+      : null;
+
   return (
     <div className="space-y-6">
       <div className="flex items-baseline justify-between">
@@ -79,6 +95,24 @@ export default async function ProjectChangeOrdersPage({ params }: PageProps) {
           + Draft change order
         </Link>
       </div>
+
+      {bannerUrl && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          <div className="font-medium">Approval link generated.</div>
+          <div className="mt-1 text-xs text-emerald-800">
+            Single-use, valid for 72 hours. Send this URL to the owner — or
+            click it yourself to demo the consumer flow.
+          </div>
+          <div className="mt-2 break-all rounded border border-emerald-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-800">
+            {bannerUrl}
+          </div>
+          <div className="mt-2 text-[11px] text-emerald-700">
+            We don&rsquo;t store raw tokens — only a hash. If you navigate
+            away, re-send the link to regenerate it. Email delivery (Resend)
+            lands later.
+          </div>
+        </div>
+      )}
 
       {cos.length === 0 ? (
         <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-12 text-center">
@@ -119,14 +153,14 @@ export default async function ProjectChangeOrdersPage({ params }: PageProps) {
                 const sign = total > 0 ? '+' : total < 0 ? '-' : '';
                 const totalDisplay = `${sign}$${formatMoney(Math.abs(total))}`;
                 return (
-                  <tr key={co.id} className="hover:bg-slate-50">
-                    <td className="border-b border-slate-100 px-3 py-2.5 font-medium text-slate-900">
+                  <tr key={co.id} className="align-top hover:bg-slate-50">
+                    <td className="border-b border-slate-100 px-3 py-3 font-medium text-slate-900">
                       {co.coNumber}
                     </td>
-                    <td className="border-b border-slate-100 px-3 py-2.5 text-slate-800">
+                    <td className="border-b border-slate-100 px-3 py-3 text-slate-800">
                       {co.description}
                     </td>
-                    <td className="border-b border-slate-100 px-3 py-2.5 text-slate-700">
+                    <td className="border-b border-slate-100 px-3 py-3 text-slate-700">
                       {co.affectedSubcontractContractNumber ? (
                         <>
                           <span className="font-medium">
@@ -142,7 +176,7 @@ export default async function ProjectChangeOrdersPage({ params }: PageProps) {
                     </td>
                     <td
                       className={
-                        'border-b border-slate-100 px-3 py-2.5 text-right tabular-nums font-medium ' +
+                        'border-b border-slate-100 px-3 py-3 text-right tabular-nums font-medium ' +
                         (total > 0
                           ? 'text-emerald-700'
                           : total < 0
@@ -152,7 +186,7 @@ export default async function ProjectChangeOrdersPage({ params }: PageProps) {
                     >
                       {totalDisplay}
                     </td>
-                    <td className="border-b border-slate-100 px-3 py-2.5">
+                    <td className="border-b border-slate-100 px-3 py-3">
                       <span
                         className={
                           'rounded-full px-2 py-0.5 text-xs font-medium ' +
@@ -162,28 +196,63 @@ export default async function ProjectChangeOrdersPage({ params }: PageProps) {
                         {co.status}
                       </span>
                     </td>
-                    <td className="border-b border-slate-100 px-3 py-2.5 text-right">
-                      {co.status === 'draft' ? (
-                        <form action={approveChangeOrder} className="inline">
-                          <input type="hidden" name="changeOrderId" value={co.id} />
-                          <input type="hidden" name="projectId" value={projectId} />
-                          <button
-                            type="submit"
-                            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
-                            title="Approve and propagate to subcontract + SoV (MVP demo path)"
+                    <td className="border-b border-slate-100 px-3 py-3 text-right">
+                      {co.status === 'draft' && (
+                        <div className="flex flex-col items-end gap-2">
+                          <form
+                            action={sendApprovalLink}
+                            className="flex items-center gap-2"
                           >
-                            Approve &amp; propagate
-                          </button>
-                        </form>
-                      ) : co.status === 'approved' ? (
+                            <input type="hidden" name="changeOrderId" value={co.id} />
+                            <input type="hidden" name="projectId" value={projectId} />
+                            <input
+                              type="email"
+                              name="recipientEmail"
+                              required
+                              placeholder="owner@example.com"
+                              className="block w-44 rounded border border-slate-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              className="rounded-md bg-blue-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-blue-800"
+                              title="Send single-use approval link to the owner"
+                            >
+                              Send link
+                            </button>
+                          </form>
+                          <form action={approveChangeOrder} className="inline">
+                            <input type="hidden" name="changeOrderId" value={co.id} />
+                            <input type="hidden" name="projectId" value={projectId} />
+                            <button
+                              type="submit"
+                              className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100"
+                              title="Dev shortcut: approve directly without the magic-link"
+                            >
+                              Approve directly (dev)
+                            </button>
+                          </form>
+                        </div>
+                      )}
+                      {co.status === 'pending_owner' && (
+                        <span className="text-xs text-slate-600">
+                          Awaiting owner approval
+                        </span>
+                      )}
+                      {co.status === 'approved' && (
                         <span className="text-xs text-slate-500">
                           Propagated{' '}
                           {co.approvedAt
                             ? new Date(co.approvedAt).toLocaleDateString()
                             : ''}
                         </span>
-                      ) : (
-                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                      {co.status === 'owner_rejected' && (
+                        <span className="text-xs text-red-700">
+                          Rejected by owner
+                        </span>
+                      )}
+                      {co.status === 'cancelled' && (
+                        <span className="text-xs text-slate-400">cancelled</span>
                       )}
                     </td>
                   </tr>
@@ -196,11 +265,10 @@ export default async function ProjectChangeOrdersPage({ params }: PageProps) {
 
       {cos.some((c) => c.status === 'draft') && (
         <p className="text-xs text-slate-500">
-          The Approve &amp; propagate button is the MVP demo path —
-          it skips the Principal &rarr; Architect &rarr; Owner magic-link
-          chain and approves directly. The atomic propagation transaction
-          (subcontract.current_amount + every affected SoV line +
-          approval_event audit row) is real.
+          The magic-link path (Send link &rarr; owner approves at /approve)
+          is the real flow. The Principal &rarr; Architect intermediate
+          steps land when the rest of the chain is wired. Approve-directly
+          is a dev shortcut that skips the link entirely.
         </p>
       )}
     </div>
