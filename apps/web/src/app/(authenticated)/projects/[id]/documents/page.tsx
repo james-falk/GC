@@ -1,111 +1,145 @@
-// Documents tab — Document Vault. See gc-wireframes-brief.md § Screen 5
-// (Documents subtab on Subcontract Detail) and the data-model entity
-// DocumentAttachment (polymorphic). Project-scoped here; per-subcontract
-// filtering lands when subcontracts CRUD does.
+import { and, desc, eq, inArray, or } from 'drizzle-orm';
+import { db, schema } from '@constructor/db';
+import { getCurrentTenant } from '@/lib/tenant';
+import { DocumentsUploader } from './_components/uploader';
+import { DownloadButton } from './_components/download-button';
+
+// Documents tab — Document Vault. Real query against document_attachments
+// scoped to this project. Direct-to-R2 upload pipeline via presigned URLs.
 //
-// Phase C scope: list + non-functional upload zone, mocked entries shaped
-// on a typical project doc set. Real R2 upload + signed URL retrieval is
-// a follow-up — needs Cloudflare R2 wiring + presigned-URL flow.
+// We surface attachments tied directly to entity_type='project'
+// PLUS attachments belonging to entities owned by this project (sworn
+// statements, change orders, pay applications). The schema is polymorphic;
+// we union those into a single list ordered by upload time.
+
+type PageProps = {
+  params: Promise<{ id: string }>;
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  project: 'Project',
+  pay_application: 'Pay app',
+  change_order: 'CO',
+  sworn_statement: 'Sworn statement',
+  subcontract: 'Subcontract',
+  subcontractor: 'Subcontractor',
+  sov_line: 'SoV line',
+};
 
 const TYPE_STYLES: Record<string, string> = {
-  Contract: 'bg-blue-100 text-blue-800',
-  COI: 'bg-violet-100 text-violet-800',
-  'W-9': 'bg-slate-200 text-slate-800',
-  'Pay app': 'bg-emerald-100 text-emerald-800',
-  'Sworn statement': 'bg-amber-100 text-amber-800',
-  RFI: 'bg-orange-100 text-orange-800',
-  Other: 'bg-slate-100 text-slate-700',
+  project: 'bg-slate-100 text-slate-700',
+  pay_application: 'bg-emerald-100 text-emerald-800',
+  change_order: 'bg-blue-100 text-blue-800',
+  sworn_statement: 'bg-amber-100 text-amber-800',
+  subcontract: 'bg-violet-100 text-violet-800',
+  subcontractor: 'bg-violet-100 text-violet-800',
+  sov_line: 'bg-slate-100 text-slate-700',
 };
 
-type Doc = {
-  id: string;
-  filename: string;
-  type: keyof typeof TYPE_STYLES;
-  size: string;
-  uploadedBy: string;
-  uploadedAt: string;
-};
+export default async function ProjectDocumentsPage({ params }: PageProps) {
+  const { id: projectId } = await params;
+  const tenant = await getCurrentTenant();
 
-const MOCK_DOCS: Doc[] = [
-  {
-    id: 'doc-1',
-    filename: '215-002 — Brothers & Bricks signed contract.pdf',
-    type: 'Contract',
-    size: '1.2 MB',
-    uploadedBy: 'Lena Torres',
-    uploadedAt: '3 weeks ago',
-  },
-  {
-    id: 'doc-2',
-    filename: 'Brothers & Bricks — COI 2026.pdf',
-    type: 'COI',
-    size: '340 KB',
-    uploadedBy: 'Riley Kim',
-    uploadedAt: '2 weeks ago',
-  },
-  {
-    id: 'doc-3',
-    filename: 'Brothers & Bricks — W-9.pdf',
-    type: 'W-9',
-    size: '128 KB',
-    uploadedBy: 'Riley Kim',
-    uploadedAt: '4 weeks ago',
-  },
-  {
-    id: 'doc-4',
-    filename: '215 — March 2026 owner pay app G702 (signed).pdf',
-    type: 'Pay app',
-    size: '512 KB',
-    uploadedBy: 'Sam Rivera',
-    uploadedAt: 'today',
-  },
-  {
-    id: 'doc-5',
-    filename: '215 — March 2026 sworn statement (signed + notarized).pdf',
-    type: 'Sworn statement',
-    size: '624 KB',
-    uploadedBy: 'Sam Rivera',
-    uploadedAt: 'today',
-  },
-  {
-    id: 'doc-6',
-    filename: 'RFI 014 — south entrance brick wall extension.pdf',
-    type: 'RFI',
-    size: '218 KB',
-    uploadedBy: 'Jordan Wells',
-    uploadedAt: '1 week ago',
-  },
-  {
-    id: 'doc-7',
-    filename: 'Apex Electric — signed contract.pdf',
-    type: 'Contract',
-    size: '880 KB',
-    uploadedBy: 'Lena Torres',
-    uploadedAt: '3 weeks ago',
-  },
-  {
-    id: 'doc-8',
-    filename: 'Apex Electric — COI 2026.pdf',
-    type: 'COI',
-    size: '298 KB',
-    uploadedBy: 'Riley Kim',
-    uploadedAt: '2 weeks ago',
-  },
-];
+  // Two queries to keep tenant scoping clean:
+  //   1. attachments directly on this project
+  //   2. attachments on child entities (CO / pay app / sworn statement)
+  //      that belong to this project. We resolve the ids first then filter.
+  const childCoIds = await db
+    .select({ id: schema.changeOrders.id })
+    .from(schema.changeOrders)
+    .where(
+      and(
+        eq(schema.changeOrders.projectId, projectId),
+        eq(schema.changeOrders.tenantId, tenant.id),
+      ),
+    );
+  const childPayAppIds = await db
+    .select({ id: schema.payApplications.id })
+    .from(schema.payApplications)
+    .where(
+      and(
+        eq(schema.payApplications.projectId, projectId),
+        eq(schema.payApplications.tenantId, tenant.id),
+      ),
+    );
+  const childSwornStatementIds = await db
+    .select({ id: schema.swornStatements.id })
+    .from(schema.swornStatements)
+    .innerJoin(
+      schema.payApplications,
+      eq(schema.swornStatements.payApplicationId, schema.payApplications.id),
+    )
+    .where(
+      and(
+        eq(schema.payApplications.projectId, projectId),
+        eq(schema.payApplications.tenantId, tenant.id),
+      ),
+    );
 
-const TYPE_FILTERS: Array<keyof typeof TYPE_STYLES | 'All'> = [
-  'All',
-  'Contract',
-  'COI',
-  'W-9',
-  'Pay app',
-  'Sworn statement',
-  'RFI',
-  'Other',
-];
+  const conditions = [
+    and(
+      eq(schema.documentAttachments.entityType, 'project'),
+      eq(schema.documentAttachments.entityId, projectId),
+    ),
+  ];
+  if (childCoIds.length > 0) {
+    conditions.push(
+      and(
+        eq(schema.documentAttachments.entityType, 'change_order'),
+        inArray(
+          schema.documentAttachments.entityId,
+          childCoIds.map((c) => c.id),
+        ),
+      ),
+    );
+  }
+  if (childPayAppIds.length > 0) {
+    conditions.push(
+      and(
+        eq(schema.documentAttachments.entityType, 'pay_application'),
+        inArray(
+          schema.documentAttachments.entityId,
+          childPayAppIds.map((c) => c.id),
+        ),
+      ),
+    );
+  }
+  if (childSwornStatementIds.length > 0) {
+    conditions.push(
+      and(
+        eq(schema.documentAttachments.entityType, 'sworn_statement'),
+        inArray(
+          schema.documentAttachments.entityId,
+          childSwornStatementIds.map((c) => c.id),
+        ),
+      ),
+    );
+  }
 
-export default function ProjectDocumentsPage() {
-  const docs = MOCK_DOCS;
+  const docs = await db
+    .select({
+      id: schema.documentAttachments.id,
+      entityType: schema.documentAttachments.entityType,
+      entityId: schema.documentAttachments.entityId,
+      filename: schema.documentAttachments.filename,
+      storageKey: schema.documentAttachments.storageKey,
+      mimeType: schema.documentAttachments.mimeType,
+      sizeBytes: schema.documentAttachments.sizeBytes,
+      createdAt: schema.documentAttachments.createdAt,
+      uploadedByEmail: schema.users.email,
+    })
+    .from(schema.documentAttachments)
+    .leftJoin(
+      schema.users,
+      eq(schema.documentAttachments.uploadedByUserId, schema.users.id),
+    )
+    .where(
+      and(
+        eq(schema.documentAttachments.tenantId, tenant.id),
+        or(...conditions),
+      ),
+    )
+    .orderBy(desc(schema.documentAttachments.createdAt));
 
   return (
     <div className="space-y-5">
@@ -117,111 +151,107 @@ export default function ProjectDocumentsPage() {
             sent to an external party lives here as the system of record.
           </p>
         </div>
-        <button
-          type="button"
-          disabled
-          className="rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white opacity-60"
-        >
-          + Upload
-        </button>
+        <DocumentsUploader projectId={projectId} />
       </div>
 
-      {/* Filter chips */}
-      <div className="flex flex-wrap gap-2">
-        {TYPE_FILTERS.map((f, idx) => (
-          <span
-            key={f}
-            className={
-              'rounded-full border px-3 py-1 text-xs font-medium ' +
-              (idx === 0
-                ? 'border-blue-200 bg-blue-50 text-blue-800'
-                : 'border-slate-200 bg-white text-slate-700')
-            }
-          >
-            {f}
-          </span>
-        ))}
-      </div>
-
-      {/* Drag-drop zone (visual only) */}
       <div className="rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
         <p className="text-sm font-medium text-slate-700">
-          Drag files here, or click <span className="text-blue-700">Upload</span>
+          PDF, JPG, PNG up to 25 MB.
         </p>
         <p className="mt-1 text-xs text-slate-500">
-          PDF, JPG, PNG up to 25 MB. Real upload to R2 lands in a follow-up
-          session — for now this is a mock.
+          Files upload directly to Cloudflare R2 — bytes don&rsquo;t pass through
+          the app server.
         </p>
       </div>
 
-      {/* Document table */}
-      <div className="overflow-hidden rounded-lg border border-slate-200">
-        <table className="w-full border-separate border-spacing-0">
-          <thead>
-            <tr className="bg-slate-50 text-left">
-              <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
-                Type
-              </th>
-              <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
-                Filename
-              </th>
-              <th className="border-b border-slate-200 px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
-                Size
-              </th>
-              <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
-                Uploaded by
-              </th>
-              <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
-                Uploaded
-              </th>
-              <th className="border-b border-slate-200 px-4 py-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {docs.map((d) => (
-              <tr key={d.id} className="hover:bg-slate-50">
-                <td className="border-b border-slate-100 px-4 py-3 text-sm">
-                  <span
-                    className={
-                      'rounded-full px-2 py-0.5 text-xs font-medium ' +
-                      (TYPE_STYLES[d.type] ?? TYPE_STYLES.Other)
-                    }
-                  >
-                    {d.type}
-                  </span>
-                </td>
-                <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium text-slate-800">
-                  {d.filename}
-                </td>
-                <td className="border-b border-slate-100 px-4 py-3 text-right text-sm tabular-nums text-slate-600">
-                  {d.size}
-                </td>
-                <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700">
-                  {d.uploadedBy}
-                </td>
-                <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-500">
-                  {d.uploadedAt}
-                </td>
-                <td className="border-b border-slate-100 px-4 py-3 text-right">
-                  <button
-                    type="button"
-                    disabled
-                    className="text-xs font-medium text-slate-400"
-                  >
-                    Download
-                  </button>
-                </td>
+      {docs.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-12 text-center">
+          <p className="text-sm text-slate-700">No files attached yet.</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Use the Upload button to add the first document.
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-slate-200">
+          <table className="w-full border-separate border-spacing-0">
+            <thead>
+              <tr className="bg-slate-50 text-left">
+                <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Type
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Filename
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Size
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Uploaded by
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Uploaded
+                </th>
+                <th className="border-b border-slate-200 px-4 py-3"></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <p className="text-xs text-slate-500">
-        Mocked entries — real R2 storage + signed-URL downloads land in a
-        follow-up. The polymorphic <code>document_attachments</code> schema
-        is already in place; just needs the upload pipeline.
-      </p>
+            </thead>
+            <tbody>
+              {docs.map((d) => {
+                const syntheticHref = d.storageKey.startsWith('synthetic://')
+                  ? syntheticToHref(d.storageKey, projectId)
+                  : null;
+                return (
+                  <tr key={d.id} className="hover:bg-slate-50">
+                    <td className="border-b border-slate-100 px-4 py-3 text-sm">
+                      <span
+                        className={
+                          'rounded-full px-2 py-0.5 text-xs font-medium ' +
+                          (TYPE_STYLES[d.entityType] ?? 'bg-slate-100 text-slate-700')
+                        }
+                      >
+                        {TYPE_LABELS[d.entityType] ?? d.entityType}
+                      </span>
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium text-slate-800">
+                      {d.filename}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 text-right text-sm tabular-nums text-slate-600">
+                      {formatSize(d.sizeBytes)}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700">
+                      {d.uploadedByEmail ?? '—'}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-500">
+                      {new Date(d.createdAt).toLocaleDateString()}
+                    </td>
+                    <td className="border-b border-slate-100 px-4 py-3 text-right">
+                      <DownloadButton
+                        attachmentId={d.id}
+                        syntheticHref={syntheticHref}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Synthetic storage keys point at on-demand-rendered PDFs (sworn
+// statements, AIA pay apps) instead of R2 bytes. Map them to the
+// dedicated render route so download still works.
+function syntheticToHref(storageKey: string, _projectId: string): string | null {
+  // Format: synthetic://sworn-statement/<id>.pdf
+  const m = /^synthetic:\/\/sworn-statement\/([0-9a-f-]+)\.pdf$/.exec(storageKey);
+  if (m) return `/api/sworn-statement/${m[1]}`;
+  return null;
 }

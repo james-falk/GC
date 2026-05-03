@@ -60,6 +60,7 @@ export default async function SubcontractorsPage() {
                 <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
                   Address
                 </th>
+                <th className="border-b border-slate-200 px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
@@ -76,6 +77,14 @@ export default async function SubcontractorsPage() {
                   </td>
                   <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-700">
                     {s.address ?? <span className="text-slate-400">—</span>}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-right text-xs">
+                    <Link
+                      href={`/subcontractors/${s.id}/edit`}
+                      className="font-medium text-blue-700 transition hover:text-blue-900"
+                    >
+                      Edit
+                    </Link>
                   </td>
                 </tr>
               ))}

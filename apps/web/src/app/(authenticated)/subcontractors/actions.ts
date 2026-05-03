@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 
@@ -49,6 +50,49 @@ export async function createSubcontractor(formData: FormData) {
     contactPhone: parsed.contactPhone ?? null,
     address: parsed.address ?? null,
   });
+
+  revalidatePath('/subcontractors');
+  redirect('/subcontractors');
+}
+
+const UpdateSubcontractorInput = NewSubcontractorInput.extend({
+  subcontractorId: z.string().uuid(),
+});
+
+export async function updateSubcontractor(formData: FormData): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const parsed = UpdateSubcontractorInput.parse({
+    subcontractorId: formData.get('subcontractorId'),
+    name: formData.get('name'),
+    contactEmail: formData.get('contactEmail'),
+    contactPhone: formData.get('contactPhone'),
+    address: formData.get('address'),
+  });
+
+  // Verify it belongs to this tenant.
+  const [existing] = await db
+    .select({ id: schema.subcontractors.id })
+    .from(schema.subcontractors)
+    .where(
+      and(
+        eq(schema.subcontractors.id, parsed.subcontractorId),
+        eq(schema.subcontractors.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!existing) {
+    throw new Error('Subcontractor not found in this tenant');
+  }
+
+  await db
+    .update(schema.subcontractors)
+    .set({
+      name: parsed.name,
+      contactEmail: parsed.contactEmail ?? null,
+      contactPhone: parsed.contactPhone ?? null,
+      address: parsed.address ?? null,
+    })
+    .where(eq(schema.subcontractors.id, parsed.subcontractorId));
 
   revalidatePath('/subcontractors');
   redirect('/subcontractors');

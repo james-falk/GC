@@ -11,11 +11,10 @@ import {
 // Each row shows the sub-reported percentage alongside an editable
 // gc-adjusted percentage (defaults to sub-reported). When the GC lowers
 // a value, the row visually flags the adjustment. This period $
-// recomputes from the adjusted percentage.
-//
-// Phase 2b note: GC-adjusted percentages aren't persisted yet — Approve
-// stamps the pay app as-is. Persisting per-line overrides on approve
-// lands when we extend the action to also UPDATE pay_application_lines.
+// recomputes from the adjusted percentage. Approve sends every row's
+// adjusted % + per-row note via `adjusted[<lineId>]` / `note[<lineId>]`
+// form fields; the action recomputes thisPeriod $ + retention server-side
+// and persists the overrides.
 
 const RETENTION_PCT = 10;
 
@@ -233,6 +232,12 @@ export function ReviewTable(props: Props) {
         formData.set('payAppId', props.payAppId);
         formData.set('projectId', props.projectId);
         if (kind === 'approve') {
+          for (const r of rows) {
+            formData.set(`adjusted[${r.id}]`, String(r.gcAdjustedPercent));
+            if (r.note.trim()) {
+              formData.set(`note[${r.id}]`, r.note.trim());
+            }
+          }
           await approveSubPayApp(formData);
         } else {
           formData.set('comment', comment.trim());

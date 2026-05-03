@@ -3,7 +3,13 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { resolveBaseUrl } from '@/lib/magic-link';
-import { assembleOwnerPayApp, startMonthlyPayApp } from './actions';
+import {
+  assembleOwnerPayApp,
+  cancelSubPayAppAction,
+  markOwnerPayAppPaidAction,
+  sendOwnerPayAppToOwnerAction,
+  startMonthlyPayApp,
+} from './actions';
 
 // Pay Apps tab — real list scoped to this project. See
 // gc-wireframes-brief.md § Screen 7 (review) and § Screen 9 (owner pay app).
@@ -43,6 +49,8 @@ type PageProps = {
     startedPeriod?: string;
     tokens?: string;
     skipped?: string;
+    ownerLinkPayApp?: string;
+    ownerLinkToken?: string;
   }>;
 };
 
@@ -126,6 +134,28 @@ export default async function ProjectPayAppsPage({
           </Link>
         </div>
       </div>
+
+      {/* Owner-pay-app magic-link banner — only chance to copy URL */}
+      {sp.ownerLinkPayApp && sp.ownerLinkToken && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+          <div className="font-medium">Owner approval link generated.</div>
+          <div className="mt-1 text-xs text-emerald-800">
+            Single-use, valid 7 days. Email delivery (Resend) handles this in
+            production — copy the URL by hand for now.
+          </div>
+          <div className="mt-3 break-all rounded border border-emerald-200 bg-white px-2 py-1 font-mono text-xs text-slate-800">
+            {baseUrl}/approve/{sp.ownerLinkToken}
+          </div>
+          <div className="mt-3">
+            <Link
+              href={`/projects/${projectId}/pay-apps`}
+              className="text-[11px] text-emerald-700 hover:underline"
+            >
+              Dismiss
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Just-generated magic-link banner — only chance to copy URLs */}
       {generatedLinks.length > 0 && (
@@ -301,6 +331,9 @@ export default async function ProjectPayAppsPage({
                 <th className="border-b border-slate-200 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500">
                   Submitted
                 </th>
+                <th className="border-b border-slate-200 px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -351,6 +384,78 @@ export default async function ProjectPayAppsPage({
                     {p.submittedAt
                       ? new Date(p.submittedAt).toLocaleDateString()
                       : <span className="text-slate-400">—</span>}
+                  </td>
+                  <td className="border-b border-slate-100 px-4 py-3 text-right text-xs">
+                    {p.direction === 'gc_to_owner' && p.status === 'generated' && (
+                      <form action={sendOwnerPayAppToOwnerAction} className="inline">
+                        <input type="hidden" name="payAppId" value={p.id} />
+                        <input type="hidden" name="projectId" value={projectId} />
+                        <button
+                          type="submit"
+                          className="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-800"
+                        >
+                          Send to owner
+                        </button>
+                      </form>
+                    )}
+                    {p.direction === 'gc_to_owner' && p.status === 'sent_to_owner' && (
+                      <span className="text-xs text-amber-700">Awaiting owner</span>
+                    )}
+                    {p.direction === 'gc_to_owner' && p.status === 'owner_approved' && (
+                      <form action={markOwnerPayAppPaidAction} className="inline">
+                        <input type="hidden" name="payAppId" value={p.id} />
+                        <input type="hidden" name="projectId" value={projectId} />
+                        <button
+                          type="submit"
+                          className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700"
+                        >
+                          Mark paid
+                        </button>
+                      </form>
+                    )}
+                    {p.direction === 'gc_to_owner' && p.status === 'paid' && (
+                      <span className="text-xs text-emerald-700">Paid</span>
+                    )}
+                    {p.direction === 'gc_to_owner' && p.status === 'owner_rejected' && (
+                      <span className="text-xs text-red-700">Rejected — assemble new</span>
+                    )}
+                    {p.direction === 'sub_to_gc' &&
+                      p.status !== 'included_in_owner_pay_app' &&
+                      p.status !== 'paid' &&
+                      p.status !== 'cancelled' && (
+                        <details className="inline-block text-left">
+                          <summary className="cursor-pointer text-[10px] text-slate-400 hover:text-red-700">
+                            cancel
+                          </summary>
+                          <form
+                            action={cancelSubPayAppAction}
+                            className="mt-1 flex flex-col items-end gap-1"
+                          >
+                            <input type="hidden" name="payAppId" value={p.id} />
+                            <input type="hidden" name="projectId" value={projectId} />
+                            <input
+                              type="text"
+                              name="reason"
+                              required
+                              maxLength={2000}
+                              placeholder="Reason"
+                              className="block w-40 rounded border border-slate-300 px-2 py-1 text-[11px] focus:border-red-500 focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              className="rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 transition hover:bg-red-100"
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        </details>
+                      )}
+                    {p.direction === 'sub_to_gc' &&
+                      (p.status === 'included_in_owner_pay_app' ||
+                        p.status === 'paid' ||
+                        p.status === 'cancelled') && (
+                        <span className="text-slate-400">—</span>
+                      )}
                   </td>
                 </tr>
               ))}

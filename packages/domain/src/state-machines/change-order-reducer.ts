@@ -193,3 +193,28 @@ export function pmReviseAfterRejection(
   }
   return { ok: true, nextState: { kind: 'draft' } };
 }
+
+// Cancel a CO. Legal from every non-terminal state — once a CO has
+// propagated (approved) it can't be cancelled, since downstream subcontract
+// + SoV totals were already updated. To reverse an approved CO, the user
+// issues a counter-CO.
+export function cancelChangeOrder(
+  currentKind: ChangeOrderKind,
+  reason: string,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (currentKind === 'approved') {
+    return {
+      ok: false,
+      error:
+        'cannot cancel an approved CO — propagation has already happened. Issue a counter-CO instead.',
+    };
+  }
+  if (currentKind === 'cancelled') {
+    return { ok: false, error: 'CO is already cancelled' };
+  }
+  if (!reason.trim()) {
+    return { ok: false, error: 'cancellation reason is required' };
+  }
+  return { ok: true, nextState: { kind: 'cancelled', reason, at: now } };
+}

@@ -4,6 +4,7 @@ import {
   approveChangeOrderDirect,
   architectApproveCo,
   architectRejectCo,
+  cancelChangeOrder,
   ownerApproveChangeOrder,
   ownerRejectChangeOrder,
   pmReviseAfterRejection,
@@ -217,5 +218,41 @@ describe('full CO chain transitions', () => {
 
   it('pmReviseAfterRejection rejects from non-rejection state', () => {
     expect(pmReviseAfterRejection('draft').ok).toBe(false);
+  });
+});
+
+describe('cancelChangeOrder', () => {
+  const cancellable = [
+    'draft',
+    'pending_principal',
+    'pending_architect',
+    'pending_owner',
+    'architect_rejected',
+    'owner_rejected',
+  ] as const;
+
+  for (const kind of cancellable) {
+    it(`transitions ${kind} → cancelled with reason`, () => {
+      const result = cancelChangeOrder(kind, 'scope removed by owner');
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.nextState.kind).toBe('cancelled');
+        if (result.nextState.kind === 'cancelled') {
+          expect(result.nextState.reason).toBe('scope removed by owner');
+        }
+      }
+    });
+  }
+
+  it('rejects cancellation of an approved CO', () => {
+    expect(cancelChangeOrder('approved', 'oops').ok).toBe(false);
+  });
+
+  it('rejects empty reason', () => {
+    expect(cancelChangeOrder('draft', '   ').ok).toBe(false);
+  });
+
+  it('rejects double-cancel', () => {
+    expect(cancelChangeOrder('cancelled', 'x').ok).toBe(false);
   });
 });

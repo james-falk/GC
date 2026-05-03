@@ -123,6 +123,7 @@ export default async function ProjectSubsPage({ params }: PageProps) {
                 <th className="border-b border-slate-200 px-3 py-2.5 text-xs font-medium uppercase tracking-wide text-slate-500">
                   Status
                 </th>
+                <th className="border-b border-slate-200 px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
@@ -173,6 +174,14 @@ export default async function ProjectSubsPage({ params }: PageProps) {
                         {r.status}
                       </span>
                     </td>
+                    <td className="border-b border-slate-100 px-3 py-2.5 text-right text-xs">
+                      <Link
+                        href={`/projects/${projectId}/subs/${r.id}/edit`}
+                        className="font-medium text-blue-700 transition hover:text-blue-900"
+                      >
+                        Edit
+                      </Link>
+                    </td>
                   </tr>
                 );
               })}
@@ -199,6 +208,7 @@ export default async function ProjectSubsPage({ params }: PageProps) {
                 <td className="px-3 py-2.5 text-right tabular-nums">
                   ${formatMoney(totals.current)}
                 </td>
+                <td className="px-3 py-2.5"></td>
                 <td className="px-3 py-2.5"></td>
               </tr>
             </tfoot>

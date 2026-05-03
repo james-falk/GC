@@ -4,20 +4,19 @@ import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { resolveBaseUrl } from '@/lib/magic-link';
 import {
-  approveChangeOrder,
+  cancelChangeOrderAction,
   principalApproveCoAction,
-  sendApprovalLink,
   submitCoToPrincipalAction,
 } from './actions';
 
 // Change Orders tab — real list scoped to this project.
 // See gc-wireframes-brief.md § Screen 8.
 //
-// Two approval paths from this page:
-//   1. PM-direct "Approve & propagate" — dev shortcut bypassing the
-//      magic-link chain. Triggers the atomic propagation transaction.
-//   2. "Send approval link" — generates a single-use magic-link with the
-//      target owner's email; CO transitions to pending_owner. The owner
+// Approval flow:
+//   draft → Submit to Principal (in-app approval) → Principal approve
+//   creates an architect magic-link → architect approval forwards to
+//   owner via a fresh magic-link → owner approval triggers atomic
+//   propagation (CO + subcontract + SoV updates in one transaction).
 //      clicks the link, lands on /approve/[token], approves there. Same
 //      atomic propagation runs on the consumer side.
 
@@ -203,58 +202,17 @@ export default async function ProjectChangeOrdersPage({
                     </td>
                     <td className="border-b border-slate-100 px-3 py-3 text-right">
                       {co.status === 'draft' && (
-                        <div className="flex flex-col items-end gap-2">
-                          <form action={submitCoToPrincipalAction} className="inline">
-                            <input type="hidden" name="changeOrderId" value={co.id} />
-                            <input type="hidden" name="projectId" value={projectId} />
-                            <button
-                              type="submit"
-                              className="rounded-md bg-blue-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-blue-800"
-                              title="Submit to Principal for in-app approval"
-                            >
-                              Submit to Principal
-                            </button>
-                          </form>
-                          <details className="text-right">
-                            <summary className="cursor-pointer text-[10px] text-slate-400 hover:text-slate-600">
-                              dev shortcuts
-                            </summary>
-                            <div className="mt-1 flex flex-col gap-1">
-                              <form
-                                action={sendApprovalLink}
-                                className="flex items-center gap-2"
-                              >
-                                <input type="hidden" name="changeOrderId" value={co.id} />
-                                <input type="hidden" name="projectId" value={projectId} />
-                                <input
-                                  type="email"
-                                  name="recipientEmail"
-                                  required
-                                  placeholder="owner@example.com"
-                                  className="block w-44 rounded border border-slate-300 px-2 py-1 text-[11px] focus:border-blue-500 focus:outline-none"
-                                />
-                                <button
-                                  type="submit"
-                                  className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-600 transition hover:bg-slate-50"
-                                  title="Skip Principal + Architect, send straight to owner"
-                                >
-                                  → owner
-                                </button>
-                              </form>
-                              <form action={approveChangeOrder}>
-                                <input type="hidden" name="changeOrderId" value={co.id} />
-                                <input type="hidden" name="projectId" value={projectId} />
-                                <button
-                                  type="submit"
-                                  className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700"
-                                  title="Skip the chain entirely (PM-direct propagation)"
-                                >
-                                  approve directly
-                                </button>
-                              </form>
-                            </div>
-                          </details>
-                        </div>
+                        <form action={submitCoToPrincipalAction} className="inline">
+                          <input type="hidden" name="changeOrderId" value={co.id} />
+                          <input type="hidden" name="projectId" value={projectId} />
+                          <button
+                            type="submit"
+                            className="rounded-md bg-blue-700 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-blue-800"
+                            title="Submit to Principal for in-app approval"
+                          >
+                            Submit to Principal
+                          </button>
+                        </form>
                       )}
                       {co.status === 'pending_principal' && (
                         <form action={principalApproveCoAction} className="inline">
@@ -300,6 +258,34 @@ export default async function ProjectChangeOrdersPage({
                       {co.status === 'cancelled' && (
                         <span className="text-xs text-slate-400">cancelled</span>
                       )}
+                      {co.status !== 'approved' && co.status !== 'cancelled' && (
+                        <details className="mt-1 inline-block text-left">
+                          <summary className="cursor-pointer text-[10px] text-slate-400 hover:text-red-700">
+                            cancel
+                          </summary>
+                          <form
+                            action={cancelChangeOrderAction}
+                            className="mt-1 flex flex-col items-end gap-1"
+                          >
+                            <input type="hidden" name="changeOrderId" value={co.id} />
+                            <input type="hidden" name="projectId" value={projectId} />
+                            <input
+                              type="text"
+                              name="reason"
+                              required
+                              maxLength={2000}
+                              placeholder="Reason"
+                              className="block w-44 rounded border border-slate-300 px-2 py-1 text-[11px] focus:border-red-500 focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              className="rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 transition hover:bg-red-100"
+                            >
+                              Cancel CO
+                            </button>
+                          </form>
+                        </details>
+                      )}
                     </td>
                   </tr>
                 );
@@ -307,15 +293,6 @@ export default async function ProjectChangeOrdersPage({
             </tbody>
           </table>
         </div>
-      )}
-
-      {cos.some((c) => c.status === 'draft') && (
-        <p className="text-xs text-slate-500">
-          The magic-link path (Send link &rarr; owner approves at /approve)
-          is the real flow. The Principal &rarr; Architect intermediate
-          steps land when the rest of the chain is wired. Approve-directly
-          is a dev shortcut that skips the link entirely.
-        </p>
       )}
     </div>
   );

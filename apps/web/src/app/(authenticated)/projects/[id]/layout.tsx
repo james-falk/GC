@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
@@ -90,16 +91,24 @@ export default async function ProjectLayout({ children, params }: LayoutProps) {
             </span>
           </div>
           {!isArchived && (
-            <form action={archiveProject}>
-              <input type="hidden" name="projectId" value={project.id} />
-              <button
-                type="submit"
+            <div className="flex gap-2">
+              <Link
+                href={`/projects/${project.id}/edit`}
                 className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-                title="Soft-delete: project is hidden from the list but recoverable"
               >
-                Archive
-              </button>
-            </form>
+                Edit
+              </Link>
+              <form action={archiveProject}>
+                <input type="hidden" name="projectId" value={project.id} />
+                <button
+                  type="submit"
+                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                  title="Soft-delete: project is hidden from the list but recoverable"
+                >
+                  Archive
+                </button>
+              </form>
+            </div>
           )}
         </div>
         <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-4">

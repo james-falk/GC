@@ -11,6 +11,7 @@ const isProtectedRoute = createRouteMatcher([
   '/documents(.*)',
   '/drift(.*)',
   '/exports(.*)',
+  '/team(.*)',
   '/settings(.*)',
 ]);
 

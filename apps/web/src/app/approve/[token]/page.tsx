@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { hashToken } from '@/lib/magic-link';
 import { ApprovalForm } from './_components/approval-form';
@@ -50,6 +50,22 @@ export default async function ApprovePage({ params, searchParams }: PageProps) {
   }
   if (new Date(link.expiresAt).getTime() < Date.now()) {
     return <ErrorCard message="This link has expired. Ask the contractor to send a new one." />;
+  }
+
+  // Owner approving an AIA pay app — different target shape; render its
+  // own preview block. Same approval form pattern (token + approve/reject).
+  if (
+    link.targetEntityType === 'pay_application' &&
+    link.recipientRole === 'owner'
+  ) {
+    return (
+      <PayAppApprovalPage
+        token={token}
+        targetEntityId={link.targetEntityId}
+        tenantId={link.tenantId}
+        expiresAt={link.expiresAt}
+      />
+    );
   }
 
   if (
@@ -291,4 +307,143 @@ function formatExpiry(expiresAt: Date | string): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+async function PayAppApprovalPage({
+  token,
+  targetEntityId,
+  tenantId,
+  expiresAt,
+}: {
+  token: string;
+  targetEntityId: string;
+  tenantId: string;
+  expiresAt: Date | string;
+}) {
+  const [payApp] = await db
+    .select({
+      id: schema.payApplications.id,
+      periodStart: schema.payApplications.periodStart,
+      periodEnd: schema.payApplications.periodEnd,
+      totalBilled: schema.payApplications.totalBilled,
+      totalRetention: schema.payApplications.totalRetention,
+      projectName: schema.projects.name,
+      projectNumber: schema.projects.projectNumber,
+    })
+    .from(schema.payApplications)
+    .innerJoin(
+      schema.projects,
+      eq(schema.payApplications.projectId, schema.projects.id),
+    )
+    .where(
+      and(
+        eq(schema.payApplications.id, targetEntityId),
+        eq(schema.payApplications.tenantId, tenantId),
+      ),
+    )
+    .limit(1);
+  if (!payApp) {
+    return <ErrorCard message="The pay app this link points to could not be found." />;
+  }
+
+  const lines = await db
+    .select({
+      sovLineNumber: schema.sovLines.lineNumber,
+      sovDescription: schema.sovLines.description,
+      thisPeriodAmount: schema.payApplicationLines.thisPeriodAmount,
+      retentionAmount: schema.payApplicationLines.retentionAmount,
+    })
+    .from(schema.payApplicationLines)
+    .innerJoin(
+      schema.sovLines,
+      eq(schema.payApplicationLines.sovLineId, schema.sovLines.id),
+    )
+    .where(eq(schema.payApplicationLines.payApplicationId, targetEntityId))
+    .orderBy(asc(schema.sovLines.lineNumber));
+
+  const totalBilled = Number(payApp.totalBilled);
+  const totalRetention = Number(payApp.totalRetention);
+  const netDue = totalBilled - totalRetention;
+
+  return (
+    <main className="min-h-screen bg-slate-50">
+      <div className="mx-auto max-w-3xl px-4 py-8 sm:py-12">
+        <header className="mb-6 text-center sm:mb-8">
+          <div className="text-sm font-semibold tracking-tight text-slate-900">
+            constructor
+          </div>
+          <h1 className="mt-3 text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
+            Pay Application — {formatPeriod(payApp.periodStart, payApp.periodEnd)}
+          </h1>
+          <p className="mt-1 text-sm text-slate-600">
+            {payApp.projectName} · Project #{payApp.projectNumber}
+          </p>
+        </header>
+
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white p-5">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+            Line items this period
+          </div>
+          <ul className="mt-3 divide-y divide-slate-100">
+            {lines.map((l, i) => (
+              <li key={i} className="flex items-baseline justify-between gap-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-slate-900">
+                    <span className="font-medium">{l.sovLineNumber}</span>{' '}
+                    <span>{l.sovDescription}</span>
+                  </div>
+                </div>
+                <div className="tabular-nums text-sm font-semibold text-emerald-700">
+                  ${formatMoney(Number(l.thisPeriodAmount))}
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-5 space-y-2 border-t border-slate-200 pt-4 text-sm">
+            <div className="flex items-baseline justify-between">
+              <span className="text-slate-600">Total billed this period</span>
+              <span className="tabular-nums font-medium">${formatMoney(totalBilled)}</span>
+            </div>
+            <div className="flex items-baseline justify-between">
+              <span className="text-slate-600">Retention (10%)</span>
+              <span className="tabular-nums text-slate-700">
+                ${formatMoney(totalRetention)}
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between rounded-md bg-slate-50 px-3 py-2.5">
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Net due
+              </span>
+              <span className="text-base font-semibold tabular-nums text-blue-700">
+                ${formatMoney(netDue)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5 sm:p-6">
+          <ApprovalForm token={token} />
+        </div>
+
+        <p className="mt-6 text-center text-[11px] text-slate-400">
+          This link expires {formatExpiry(expiresAt)}. Single-use — once you act,
+          the link can&rsquo;t be used again.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+function formatPeriod(start: string, end: string): string {
+  const s = new Date(start);
+  const e = new Date(end);
+  if (s.getUTCMonth() === e.getUTCMonth() && s.getUTCFullYear() === e.getUTCFullYear()) {
+    return s.toLocaleDateString('en-US', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  }
+  return `${s.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} – ${e.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`;
 }

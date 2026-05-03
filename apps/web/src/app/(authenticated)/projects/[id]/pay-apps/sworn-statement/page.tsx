@@ -2,9 +2,15 @@ import Link from 'next/link';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
+import { resolveBaseUrl } from '@/lib/magic-link';
 import {
+  archiveAction,
+  architectApproveAction,
   generateSwornStatementAction,
   markNotarizedAction,
+  ownerApproveAction,
+  sendToArchitectAction,
+  sendToOwnerAction,
   uploadSignedSwornStatementAction,
 } from './actions';
 
@@ -27,11 +33,20 @@ const STATUS_ORDER = STATUS_FLOW.map((s) => s.key);
 
 type PageProps = {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{
+    sentToArchitectToken?: string;
+    sentToOwnerToken?: string;
+  }>;
 };
 
-export default async function SwornStatementPreviewPage({ params }: PageProps) {
+export default async function SwornStatementPreviewPage({
+  params,
+  searchParams,
+}: PageProps) {
   const { id: projectId } = await params;
+  const sp = await searchParams;
   const tenant = await getCurrentTenant();
+  const baseUrl = resolveBaseUrl();
 
   // Resolve the latest sworn statement for this project (joined to pay
   // app + project for tenant scoping).
@@ -211,7 +226,6 @@ export default async function SwornStatementPreviewPage({ params }: PageProps) {
                   type="submit"
                   disabled={latestSs.status !== 'generated'}
                   className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
-                  title="Mark signed (R2 upload pipeline lands in Round 4)"
                 >
                   Mark signed
                 </button>
@@ -227,21 +241,93 @@ export default async function SwornStatementPreviewPage({ params }: PageProps) {
                   Mark notarized
                 </button>
               </form>
-              <button
-                type="button"
-                disabled
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-400"
-              >
-                Send to architect (magic-link)
-              </button>
+              <form action={sendToArchitectAction}>
+                <input type="hidden" name="projectId" value={projectId} />
+                <input type="hidden" name="swornStatementId" value={latestSs.id} />
+                <button
+                  type="submit"
+                  disabled={latestSs.status !== 'notarized'}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                >
+                  Send to architect
+                </button>
+              </form>
+              <form action={architectApproveAction}>
+                <input type="hidden" name="projectId" value={projectId} />
+                <input type="hidden" name="swornStatementId" value={latestSs.id} />
+                <button
+                  type="submit"
+                  disabled={latestSs.status !== 'sent_to_architect'}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                >
+                  Architect approved
+                </button>
+              </form>
+              <form action={sendToOwnerAction}>
+                <input type="hidden" name="projectId" value={projectId} />
+                <input type="hidden" name="swornStatementId" value={latestSs.id} />
+                <button
+                  type="submit"
+                  disabled={latestSs.status !== 'architect_approved'}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                >
+                  Send to owner
+                </button>
+              </form>
+              <form action={ownerApproveAction}>
+                <input type="hidden" name="projectId" value={projectId} />
+                <input type="hidden" name="swornStatementId" value={latestSs.id} />
+                <button
+                  type="submit"
+                  disabled={latestSs.status !== 'sent_to_owner'}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                >
+                  Owner approved
+                </button>
+              </form>
+              <form action={archiveAction}>
+                <input type="hidden" name="projectId" value={projectId} />
+                <input type="hidden" name="swornStatementId" value={latestSs.id} />
+                <button
+                  type="submit"
+                  disabled={latestSs.status !== 'owner_approved'}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:hover:bg-white"
+                >
+                  Archive
+                </button>
+              </form>
             </div>
             <p className="mt-3 text-[10px] text-slate-400">
-              Send-to-architect / send-to-owner magic-link flows wire in
-              Round 4 alongside the full CO chain. Mark signed currently
-              transitions state without storing a real PDF — R2 upload
-              pipeline lands in Round 4.
+              Architect &amp; owner approval are recorded by the GC after the
+              external party signs off out-of-band. The send-to-* actions
+              generate magic-links so external parties can review the PDF.
             </p>
           </div>
+
+          {sp.sentToArchitectToken && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-900">
+              <div className="font-medium">Architect link generated.</div>
+              <div className="mt-2 break-all rounded border border-emerald-200 bg-white px-2 py-1 font-mono text-slate-800">
+                {baseUrl}/approve/{sp.sentToArchitectToken}
+              </div>
+              <p className="mt-2 text-[10px] text-emerald-800">
+                Single-use, valid 7 days. Email delivery (Resend) handles
+                this in production.
+              </p>
+            </div>
+          )}
+
+          {sp.sentToOwnerToken && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-900">
+              <div className="font-medium">Owner link generated.</div>
+              <div className="mt-2 break-all rounded border border-emerald-200 bg-white px-2 py-1 font-mono text-slate-800">
+                {baseUrl}/approve/{sp.sentToOwnerToken}
+              </div>
+              <p className="mt-2 text-[10px] text-emerald-800">
+                Single-use, valid 7 days.
+              </p>
+            </div>
+          )}
         </aside>
       </div>
     </div>

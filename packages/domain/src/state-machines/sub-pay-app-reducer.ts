@@ -84,3 +84,29 @@ export function rollIntoOwnerPayApp(
     nextState: { kind: 'included_in_owner_pay_app', ownerPayAppId, at: now },
   };
 }
+
+// Cancel a sub pay-app. Legal pre-rollup — once it's been included in an
+// owner pay-app or paid, cancellation has cross-entity consequences that
+// belong in a separate flow.
+export function cancelSubPayApp(
+  currentKind: SubPayAppKind,
+  reason: string,
+  now: Date = new Date(),
+): TransitionResult<SubPayAppState> {
+  if (
+    currentKind === 'included_in_owner_pay_app' ||
+    currentKind === 'paid'
+  ) {
+    return {
+      ok: false,
+      error: `cannot cancel from state '${currentKind}' — pay app has already been rolled up or paid. Use a CO or revisor flow instead.`,
+    };
+  }
+  if (currentKind === 'cancelled') {
+    return { ok: false, error: 'pay app is already cancelled' };
+  }
+  if (!reason.trim()) {
+    return { ok: false, error: 'cancellation reason is required' };
+  }
+  return { ok: true, nextState: { kind: 'cancelled', reason, at: now } };
+}

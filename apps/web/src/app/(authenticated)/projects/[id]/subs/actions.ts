@@ -81,3 +81,76 @@ export async function createSubcontract(formData: FormData) {
   revalidatePath(`/projects/${parsed.projectId}/subs`);
   redirect(`/projects/${parsed.projectId}/subs`);
 }
+
+// Update a subcontract. Editable fields: contract number, status,
+// inclusions/exclusions, spec sections. originalAmount and currentAmount
+// are integrity-bearing — currentAmount drifts only via approved CO
+// propagation, so we deliberately do NOT expose them here. Money changes
+// go through the change-order workflow.
+
+const UpdateSubcontractInput = z.object({
+  subcontractId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  contractNumber: z.string().trim().min(1).max(64),
+  status: z.enum(['draft', 'active', 'closed']),
+  inclusions: z
+    .string()
+    .trim()
+    .max(4000)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  exclusions: z
+    .string()
+    .trim()
+    .max(4000)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+});
+
+export async function updateSubcontract(formData: FormData): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const parsed = UpdateSubcontractInput.parse({
+    subcontractId: formData.get('subcontractId'),
+    projectId: formData.get('projectId'),
+    contractNumber: formData.get('contractNumber'),
+    status: formData.get('status'),
+    inclusions: formData.get('inclusions'),
+    exclusions: formData.get('exclusions'),
+  });
+
+  // Verify subcontract is on this tenant + project, and project not archived.
+  const [sub] = await db
+    .select({ id: schema.subcontracts.id })
+    .from(schema.subcontracts)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.subcontracts.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.subcontracts.id, parsed.subcontractId),
+        eq(schema.subcontracts.projectId, parsed.projectId),
+        eq(schema.subcontracts.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!sub) {
+    throw new Error('Subcontract not found in this project/tenant or project archived');
+  }
+
+  await db
+    .update(schema.subcontracts)
+    .set({
+      contractNumber: parsed.contractNumber,
+      status: parsed.status,
+      inclusions: parsed.inclusions ?? null,
+      exclusions: parsed.exclusions ?? null,
+    })
+    .where(eq(schema.subcontracts.id, parsed.subcontractId));
+
+  revalidatePath(`/projects/${parsed.projectId}/subs`);
+  redirect(`/projects/${parsed.projectId}/subs`);
+}

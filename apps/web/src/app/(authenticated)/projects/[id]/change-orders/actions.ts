@@ -7,6 +7,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   approveChangeOrderDirect,
   buildPropagationOps,
+  cancelChangeOrder,
   principalApproveCo,
   principalRejectCo,
   sendDraftToOwner,
@@ -17,7 +18,13 @@ import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { ensureCurrentUser } from '@/lib/user';
 import { applyPropagationOp } from '@/lib/co-propagation-tx';
-import { generateRawToken, hashToken } from '@/lib/magic-link';
+import {
+  buildApproveUrl,
+  generateRawToken,
+  hashToken,
+  resolveBaseUrl,
+} from '@/lib/magic-link';
+import { notifyMagicLink } from '@/lib/email';
 
 // Server actions for the ChangeOrder workflow.
 //
@@ -298,6 +305,8 @@ export async function sendApprovalLink(formData: FormData): Promise<void> {
     .select({
       id: schema.changeOrders.id,
       status: schema.changeOrders.status,
+      coNumber: schema.changeOrders.coNumber,
+      projectName: schema.projects.name,
     })
     .from(schema.changeOrders)
     .innerJoin(
@@ -348,6 +357,16 @@ export async function sendApprovalLink(formData: FormData): Promise<void> {
       .update(schema.changeOrders)
       .set({ status: 'pending_owner' })
       .where(eq(schema.changeOrders.id, co.id));
+  });
+
+  void notifyMagicLink({
+    to: parsed.recipientEmail,
+    recipientLabel: 'Project Owner',
+    documentLabel: `change order ${co.coNumber}`,
+    projectName: co.projectName,
+    contractorName: tenant.name,
+    approvalUrl: buildApproveUrl(rawToken, resolveBaseUrl()),
+    expiresInHours: MAGIC_LINK_TTL_HOURS,
   });
 
   // Surface the raw token to the requester via revalidatePath + a query
@@ -448,7 +467,9 @@ export async function principalApproveCoAction(
     .select({
       id: schema.changeOrders.id,
       status: schema.changeOrders.status,
+      coNumber: schema.changeOrders.coNumber,
       projectArchitectId: schema.projects.architectId,
+      projectName: schema.projects.name,
     })
     .from(schema.changeOrders)
     .innerJoin(
@@ -523,6 +544,16 @@ export async function principalApproveCoAction(
     });
   });
 
+  void notifyMagicLink({
+    to: recipientEmail,
+    recipientLabel: 'Architect',
+    documentLabel: `change order ${co.coNumber}`,
+    projectName: co.projectName,
+    contractorName: tenant.name,
+    approvalUrl: buildApproveUrl(rawToken, resolveBaseUrl()),
+    expiresInHours: MAGIC_LINK_TTL_HOURS,
+  });
+
   // Carry the raw token back so the GC can copy it (until Resend lands).
   const params = new URLSearchParams({ token: rawToken, coId: co.id });
   revalidatePath(`/projects/${parsed.projectId}/change-orders`);
@@ -591,6 +622,89 @@ export async function principalRejectCoAction(
       actorType: 'internal_user',
       actorUserId: user.id,
       comment: parsed.comment,
+    });
+  });
+
+  revalidatePath(`/projects/${parsed.projectId}/change-orders`);
+  redirect(`/projects/${parsed.projectId}/change-orders`);
+}
+
+// Cancel/void a change order. Legal from any non-approved, non-cancelled
+// state — once propagation has happened the only path is a counter-CO.
+// We also consume any outstanding magic-link so it can't still be used.
+
+const CancelCoInput = z.object({
+  changeOrderId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  reason: z.string().trim().min(1, 'reason required').max(2000),
+});
+
+export async function cancelChangeOrderAction(formData: FormData): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = CancelCoInput.parse({
+    changeOrderId: formData.get('changeOrderId'),
+    projectId: formData.get('projectId'),
+    reason: formData.get('reason'),
+  });
+
+  const [co] = await db
+    .select({
+      id: schema.changeOrders.id,
+      status: schema.changeOrders.status,
+    })
+    .from(schema.changeOrders)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.changeOrders.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.changeOrders.id, parsed.changeOrderId),
+        eq(schema.changeOrders.projectId, parsed.projectId),
+        eq(schema.changeOrders.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!co) throw new Error('Change order not found or project archived');
+
+  const transition = cancelChangeOrder(
+    co.status as Parameters<typeof cancelChangeOrder>[0],
+    parsed.reason,
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.changeOrders)
+      .set({ status: 'cancelled' })
+      .where(eq(schema.changeOrders.id, co.id));
+
+    // Consume any unconsumed magic-link tied to this CO so the URL can't
+    // be used after cancel.
+    await tx
+      .update(schema.magicLinks)
+      .set({ consumedAt: new Date() })
+      .where(
+        and(
+          eq(schema.magicLinks.targetEntityType, 'change_order'),
+          eq(schema.magicLinks.targetEntityId, co.id),
+          isNull(schema.magicLinks.consumedAt),
+        ),
+      );
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'change_order',
+      entityId: co.id,
+      fromStatus: co.status,
+      toStatus: 'cancelled',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: parsed.reason,
     });
   });
 

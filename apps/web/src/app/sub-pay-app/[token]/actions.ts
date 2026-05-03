@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   checkSubBillableCeiling,
   submitSubPayApp,
@@ -11,6 +11,8 @@ import {
 import { db, schema } from '@constructor/db';
 import { TOKEN_PATTERN, loadValidLink } from '@/lib/magic-link';
 import { centsToDollarsString, dollarsStringToCents } from '@/lib/money';
+import { previouslyBilledByLineForSubcontract } from '@/lib/pay-app-rollup';
+import { leafSovLinesForSubcontract } from '@/lib/sov-leaves';
 
 // Sub portal: real submit. The sub fills percentages on each line of their
 // SoV; we run the ceiling invariant on every line, persist
@@ -108,24 +110,31 @@ export async function submitSubPayAppAction(formData: FormData): Promise<void> {
   );
   if (!transition.ok) throw new Error(transition.error);
 
-  // SoV lines for this sub — used to validate the form contains every
-  // line and compute totals.
-  const sovLines = await db
-    .select({
-      id: schema.sovLines.id,
-      currentAmount: schema.sovLines.currentAmount,
-    })
-    .from(schema.sovLines)
-    .where(
-      and(
-        eq(schema.sovLines.subcontractId, payApp.subcontractId),
-        eq(schema.sovLines.tenantId, link.tenantId),
-      ),
-    )
-    .orderBy(asc(schema.sovLines.lineNumber));
+  // Leaf SoV lines for this sub — same filter the portal uses to render
+  // the form. Parents broken into children are excluded.
+  const sovLines = await leafSovLinesForSubcontract({
+    subcontractId: payApp.subcontractId,
+    tenantId: link.tenantId,
+    projectId: payApp.projectId,
+  });
+
+  // Real previously-billed lookup, scoped to finalized prior pay apps on
+  // this subcontract (excluding the one we're submitting).
+  const previouslyBilledByLine = await previouslyBilledByLineForSubcontract({
+    subcontractId: payApp.subcontractId,
+    tenantId: link.tenantId,
+    excludePayAppId: payApp.id,
+  });
 
   const linesById = new Map(sovLines.map((l) => [l.id, l]));
   const inputs = parseLineInputs(formData);
+
+  // Aggregate previously-billed across the whole subcontract for the
+  // subcontract-level ceiling guard.
+  let aggregatePreviouslyBilledCents = 0;
+  for (const dollars of previouslyBilledByLine.values()) {
+    aggregatePreviouslyBilledCents += Math.round(dollars * 100);
+  }
 
   // For each input line: compute this-period dollars, run ceiling, build
   // the row to insert.
@@ -156,8 +165,9 @@ export async function submitSubPayAppAction(formData: FormData): Promise<void> {
     const earnedToDateCents = Math.round(
       (sovCurrentCents * input.percent) / 100,
     );
-    // Previously-billed lookup: 0 for Phase 1 (richer rollup is a follow-up).
-    const previouslyBilledCents = 0;
+    const previouslyBilledCents = Math.round(
+      (previouslyBilledByLine.get(input.sovLineId) ?? 0) * 100,
+    );
     const thisPeriodCents = Math.max(0, earnedToDateCents - previouslyBilledCents);
     const storedCents = Math.round(input.storedMaterials * 100);
     const retentionCents = Math.round(
@@ -193,10 +203,11 @@ export async function submitSubPayAppAction(formData: FormData): Promise<void> {
   }
 
   // Subcontract-aggregate ceiling check: total billed across all lines
-  // shouldn't exceed the subcontract's current amount.
+  // (including prior periods) shouldn't exceed the subcontract's current
+  // amount.
   const aggregateCheck = checkSubBillableCeiling({
     subcontractCurrentAmountCents: subContractCents,
-    previouslyBilledAmountCents: 0,
+    previouslyBilledAmountCents: aggregatePreviouslyBilledCents,
     thisPeriodAmountCents: totalThisPeriodCents,
   });
   if (!aggregateCheck.ok) {
@@ -242,4 +253,116 @@ export async function submitSubPayAppAction(formData: FormData): Promise<void> {
   revalidatePath(`/projects/${payApp.projectId}/pay-apps`);
 
   redirect(`/sub-pay-app/${parsed.token}?status=submitted`);
+}
+
+// Save Draft — persists current line values without transitioning the pay
+// app or consuming the magic-link. Sub can come back via the same URL,
+// see their saved values, and continue. Replaces all existing
+// pay_application_lines for this pay app to keep the row set in sync with
+// the latest form state (simpler than upsert-by-sov-line).
+
+export async function saveDraftSubPayAppAction(formData: FormData): Promise<void> {
+  const parsed = SubmitInput.parse({
+    token: formData.get('token'),
+  });
+  const link = await loadValidLink(parsed.token);
+
+  if (
+    link.targetEntityType !== 'pay_application' ||
+    link.recipientRole !== 'sub_user'
+  ) {
+    throw new Error(
+      `magic-link target ${link.targetEntityType} / role ${link.recipientRole} not supported on sub portal`,
+    );
+  }
+
+  const [payApp] = await db
+    .select({
+      id: schema.payApplications.id,
+      status: schema.payApplications.status,
+      projectId: schema.payApplications.projectId,
+      subcontractId: schema.payApplications.subcontractId,
+    })
+    .from(schema.payApplications)
+    .where(
+      and(
+        eq(schema.payApplications.id, link.targetEntityId),
+        eq(schema.payApplications.tenantId, link.tenantId),
+      ),
+    )
+    .limit(1);
+  if (!payApp || !payApp.subcontractId) throw new Error('Pay app not found');
+
+  // Save Draft is only legal while the sub still has the editing right —
+  // i.e. status is draft (initial) or needs_revision (GC bounced it back).
+  if (payApp.status !== 'draft' && payApp.status !== 'needs_revision') {
+    throw new Error(
+      `cannot save draft from state '${payApp.status}' — pay app is no longer editable`,
+    );
+  }
+
+  const sovLines = await leafSovLinesForSubcontract({
+    subcontractId: payApp.subcontractId,
+    tenantId: link.tenantId,
+    projectId: payApp.projectId,
+  });
+  const previouslyBilledByLine = await previouslyBilledByLineForSubcontract({
+    subcontractId: payApp.subcontractId,
+    tenantId: link.tenantId,
+    excludePayAppId: payApp.id,
+  });
+
+  const linesById = new Map(sovLines.map((l) => [l.id, l]));
+  const inputs = parseLineInputs(formData);
+
+  const RETENTION_PCT_CENTS = 10;
+  const linesToInsert: Array<{
+    payApplicationId: string;
+    sovLineId: string;
+    previouslyBilledAmount: string;
+    subReportedPercent: string;
+    gcAdjustedPercent: string;
+    thisPeriodAmount: string;
+    storedMaterialsAmount: string;
+    retentionAmount: string;
+  }> = [];
+
+  for (const input of inputs) {
+    const sov = linesById.get(input.sovLineId);
+    if (!sov) {
+      throw new Error(`SoV line ${input.sovLineId} not found on this subcontract`);
+    }
+    const sovCurrentCents = dollarsStringToCents(sov.currentAmount);
+    const earnedToDateCents = Math.round((sovCurrentCents * input.percent) / 100);
+    const previouslyBilledCents = Math.round(
+      (previouslyBilledByLine.get(input.sovLineId) ?? 0) * 100,
+    );
+    const thisPeriodCents = Math.max(0, earnedToDateCents - previouslyBilledCents);
+    const storedCents = Math.round(input.storedMaterials * 100);
+    const retentionCents = Math.round((thisPeriodCents * RETENTION_PCT_CENTS) / 100);
+
+    linesToInsert.push({
+      payApplicationId: payApp.id,
+      sovLineId: input.sovLineId,
+      previouslyBilledAmount: centsToDollarsString(previouslyBilledCents),
+      subReportedPercent: input.percent.toFixed(2),
+      gcAdjustedPercent: input.percent.toFixed(2),
+      thisPeriodAmount: centsToDollarsString(thisPeriodCents),
+      storedMaterialsAmount: centsToDollarsString(storedCents),
+      retentionAmount: centsToDollarsString(retentionCents),
+    });
+  }
+
+  // No ceiling check on save-draft — overruns are allowed mid-edit, just
+  // not at submit time. The form already highlights over-ceiling lines.
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(schema.payApplicationLines)
+      .where(eq(schema.payApplicationLines.payApplicationId, payApp.id));
+    if (linesToInsert.length > 0) {
+      await tx.insert(schema.payApplicationLines).values(linesToInsert);
+    }
+  });
+
+  redirect(`/sub-pay-app/${parsed.token}?status=draft-saved`);
 }

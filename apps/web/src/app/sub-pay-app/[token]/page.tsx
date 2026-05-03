@@ -1,6 +1,8 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { hashToken, TOKEN_PATTERN } from '@/lib/magic-link';
+import { previouslyBilledByLineForSubcontract } from '@/lib/pay-app-rollup';
+import { leafSovLinesForSubcontract } from '@/lib/sov-leaves';
 import { SubPayAppForm } from './_components/sub-pay-app-form';
 
 // Sub pay-app portal — public route, no Clerk auth. The token in the URL
@@ -28,6 +30,8 @@ export default async function SubPayAppPage({ params, searchParams }: PageProps)
       />
     );
   }
+  // 'draft-saved' falls through to the regular form so the sub can keep
+  // editing — we render a confirmation banner inside the form instead.
 
   if (!TOKEN_PATTERN.test(token)) {
     return <ErrorCard message="This link is malformed." />;
@@ -67,6 +71,7 @@ export default async function SubPayAppPage({ params, searchParams }: PageProps)
       status: schema.payApplications.status,
       periodStart: schema.payApplications.periodStart,
       periodEnd: schema.payApplications.periodEnd,
+      projectId: schema.payApplications.projectId,
       subcontractId: schema.payApplications.subcontractId,
     })
     .from(schema.payApplications)
@@ -104,37 +109,49 @@ export default async function SubPayAppPage({ params, searchParams }: PageProps)
     return <ErrorCard message="Subcontract context not found." />;
   }
 
-  // SoV lines belonging to this sub's subcontract — these are the only
-  // lines this sub can bill against. Includes children of any parent line
-  // attached to the same subcontract.
-  const sovLines = await db
-    .select({
-      id: schema.sovLines.id,
-      lineNumber: schema.sovLines.lineNumber,
-      description: schema.sovLines.description,
-      currentAmount: schema.sovLines.currentAmount,
-    })
-    .from(schema.sovLines)
-    .where(
-      and(
-        eq(schema.sovLines.subcontractId, payApp.subcontractId),
-        eq(schema.sovLines.tenantId, link.tenantId),
-      ),
-    )
-    .orderBy(asc(schema.sovLines.lineNumber));
+  // Leaf SoV lines for this sub — parent rows broken into children are
+  // excluded so the sub can't bill the parent and its children.
+  const sovLines = await leafSovLinesForSubcontract({
+    subcontractId: payApp.subcontractId,
+    tenantId: link.tenantId,
+    projectId: payApp.projectId,
+  });
 
-  // Previously-billed lookup per SoV line. Sums all approved sub_to_gc
-  // pay-app lines for prior periods on this same subcontract. (For Phase 1
-  // simplicity, we treat pre-period billing as 0 here; a richer rollup is a
-  // follow-up.)
-  // TODO: real previously-billed query against approved pay-app lines.
-  const previouslyBilledById = new Map<string, number>();
+  // Previously-billed lookup per SoV line — sums every finalized prior
+  // pay-app line on this subcontract.
+  const previouslyBilledById = await previouslyBilledByLineForSubcontract({
+    subcontractId: payApp.subcontractId,
+    tenantId: link.tenantId,
+    excludePayAppId: payApp.id,
+  });
+
+  // Existing draft values (if any) for pre-fill. Sub clicked Save Draft,
+  // closed the tab, and returned via the same magic-link.
+  const existingDraftLines = await db
+    .select({
+      sovLineId: schema.payApplicationLines.sovLineId,
+      subReportedPercent: schema.payApplicationLines.subReportedPercent,
+      storedMaterialsAmount: schema.payApplicationLines.storedMaterialsAmount,
+    })
+    .from(schema.payApplicationLines)
+    .where(eq(schema.payApplicationLines.payApplicationId, payApp.id));
+  const draftBySovLine = new Map(
+    existingDraftLines.map((d) => [
+      d.sovLineId,
+      {
+        percent: Number(d.subReportedPercent),
+        stored: Number(d.storedMaterialsAmount),
+      },
+    ]),
+  );
 
   const lines = sovLines.map((l) => ({
     id: l.id,
     description: `${l.lineNumber} — ${l.description}`,
     currentAmount: Number(l.currentAmount),
     previouslyBilled: previouslyBilledById.get(l.id) ?? 0,
+    initialPercent: draftBySovLine.get(l.id)?.percent ?? 0,
+    initialStored: draftBySovLine.get(l.id)?.stored ?? 0,
   }));
 
   if (lines.length === 0) {
@@ -155,6 +172,7 @@ export default async function SubPayAppPage({ params, searchParams }: PageProps)
         contractAmount={Number(subContext.currentAmount)}
         lines={lines}
         statusLabel={payApp.status}
+        showDraftSavedBanner={status === 'draft-saved'}
       />
     </main>
   );

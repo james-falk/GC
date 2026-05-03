@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useTransition } from 'react';
-import { submitSubPayAppAction } from '../actions';
+import { saveDraftSubPayAppAction, submitSubPayAppAction } from '../actions';
 
 // Mobile-first sub pay-app form. See gc-wireframes-brief.md § Screen 6.
 //
@@ -9,6 +9,10 @@ import { submitSubPayAppAction } from '../actions';
 // percent[<sovLineId>] / stored[<sovLineId>] form fields. The server
 // re-runs the per-line + aggregate ceiling checks (checkSubBillableCeiling)
 // and inserts pay_application_lines + transitions the pay app to submitted.
+//
+// Save Draft: same payload, different action. No ceiling check, no state
+// transition, magic-link not consumed. Sub can come back via the same URL
+// and the page pre-fills from the saved values.
 
 const RETENTION_PCT = 10;
 
@@ -17,6 +21,8 @@ type Line = {
   description: string;
   currentAmount: number; // dollars
   previouslyBilled: number;
+  initialPercent: number;
+  initialStored: number;
 };
 
 type Props = {
@@ -29,17 +35,22 @@ type Props = {
   contractAmount: number;
   lines: Line[];
   statusLabel: string;
+  showDraftSavedBanner?: boolean;
 };
 
 export function SubPayAppForm(props: Props) {
   const [percents, setPercents] = useState<Record<string, number>>(
-    () => Object.fromEntries(props.lines.map((l) => [l.id, 0])),
+    () =>
+      Object.fromEntries(props.lines.map((l) => [l.id, l.initialPercent ?? 0])),
   );
   const [storedMaterials, setStoredMaterials] = useState<Record<string, number>>(
-    () => Object.fromEntries(props.lines.map((l) => [l.id, 0])),
+    () =>
+      Object.fromEntries(props.lines.map((l) => [l.id, l.initialStored ?? 0])),
   );
   const [pending, startTransition] = useTransition();
+  const [pendingKind, setPendingKind] = useState<'submit' | 'draft' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [draftSavedDismissed, setDraftSavedDismissed] = useState(false);
 
   const computed = useMemo(() => {
     let totalThisPeriod = 0;
@@ -79,11 +90,24 @@ export function SubPayAppForm(props: Props) {
         </div>
       </header>
 
+      {props.showDraftSavedBanner && !draftSavedDismissed && (
+        <div className="mb-4 flex items-center justify-between rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+          <span>Draft saved. You can come back via the same link to keep editing.</span>
+          <button
+            type="button"
+            onClick={() => setDraftSavedDismissed(true)}
+            className="text-[11px] text-emerald-700 hover:underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {editable ? (
         <div className="mb-6 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
           {props.statusLabel === 'needs_revision'
             ? 'GC requested revisions — adjust percentages and re-submit.'
-            : 'Draft — fill in this period\'s percentages, then submit for review.'}
+            : 'Draft — fill in this period\'s percentages, then submit for review. You can save and return later.'}
         </div>
       ) : (
         <div className="mb-6 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
@@ -218,27 +242,37 @@ export function SubPayAppForm(props: Props) {
           <div className="mt-3 flex gap-2">
             <button
               type="button"
-              onClick={onSubmit}
+              onClick={() => onAction('draft')}
+              disabled={!editable || pending}
+              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              {pending && pendingKind === 'draft' ? 'Saving…' : 'Save draft'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onAction('submit')}
               disabled={!editable || pending || anyOverCeiling}
               className="flex-1 rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800 disabled:opacity-50"
             >
-              {pending ? 'Submitting…' : 'Submit for review'}
+              {pending && pendingKind === 'submit' ? 'Submitting…' : 'Submit for review'}
             </button>
           </div>
           <p className="mt-2 text-center text-[10px] text-slate-400">
-            Single-use link. Once you submit, the link can&rsquo;t be used again.
+            Save Draft preserves your progress. The link works until you submit
+            for review — at that point it can&rsquo;t be reused.
           </p>
         </div>
       </div>
     </div>
   );
 
-  function onSubmit() {
+  function onAction(kind: 'submit' | 'draft') {
     setError(null);
-    if (anyOverCeiling) {
+    if (kind === 'submit' && anyOverCeiling) {
       setError('Fix the over-ceiling lines (highlighted in red) before submitting.');
       return;
     }
+    setPendingKind(kind);
     startTransition(async () => {
       try {
         const formData = new FormData();
@@ -247,12 +281,18 @@ export function SubPayAppForm(props: Props) {
           formData.set(`percent[${line.id}]`, String(percents[line.id] ?? 0));
           formData.set(`stored[${line.id}]`, String(storedMaterials[line.id] ?? 0));
         }
-        await submitSubPayAppAction(formData);
+        if (kind === 'submit') {
+          await submitSubPayAppAction(formData);
+        } else {
+          await saveDraftSubPayAppAction(formData);
+        }
         // Action redirects on success.
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Submit failed';
+        const message = e instanceof Error ? e.message : 'Action failed';
         if (message.includes('NEXT_REDIRECT')) return;
         setError(message);
+      } finally {
+        setPendingKind(null);
       }
     });
   }

@@ -60,3 +60,29 @@ export async function sendMagicLinkEmail(input: {
     return { ok: false, reason: `Resend threw: ${message}` };
   }
 }
+
+/**
+ * Fire-and-log magic-link email send. Wraps sendMagicLinkEmail with
+ * console-only error logging — failures don't surface to the user since
+ * the in-app URL banner is the deliberate fallback. Caller resolves the
+ * raw token + base URL itself so the same hashed token never crosses the
+ * Resend boundary twice.
+ */
+export async function notifyMagicLink(input: {
+  to: string;
+  recipientLabel: string;
+  documentLabel: string;
+  projectName: string;
+  contractorName: string;
+  approvalUrl: string;
+  expiresInHours: number;
+}): Promise<void> {
+  const result = await sendMagicLinkEmail(input);
+  if (!result.ok) {
+    // Surface in server logs; the in-app banner already shows the URL so
+    // the GC can deliver out-of-band.
+    console.warn(
+      `[magic-link email] not delivered to ${input.to}: ${result.reason}`,
+    );
+  }
+}

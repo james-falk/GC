@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cancelSubPayApp,
   pmApproveSubPayApp,
   pmRequestRevisionSubPayApp,
   rollIntoOwnerPayApp,
@@ -134,4 +135,44 @@ describe('rollIntoOwnerPayApp', () => {
       expect(result.ok).toBe(false);
     });
   }
+});
+
+describe('cancelSubPayApp', () => {
+  const cancellable = [
+    'draft',
+    'submitted',
+    'needs_revision',
+    'approved_by_pm',
+    'approved_by_principal',
+    'approved',
+  ] as const;
+
+  for (const kind of cancellable) {
+    it(`transitions ${kind} → cancelled with reason`, () => {
+      const result = cancelSubPayApp(kind, 'sub closed shop');
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.nextState.kind).toBe('cancelled');
+        if (result.nextState.kind === 'cancelled') {
+          expect(result.nextState.reason).toBe('sub closed shop');
+        }
+      }
+    });
+  }
+
+  it('rejects empty reason', () => {
+    expect(cancelSubPayApp('draft', '   ').ok).toBe(false);
+  });
+
+  it('rejects cancel from included_in_owner_pay_app', () => {
+    expect(cancelSubPayApp('included_in_owner_pay_app', 'x').ok).toBe(false);
+  });
+
+  it('rejects cancel from paid', () => {
+    expect(cancelSubPayApp('paid', 'x').ok).toBe(false);
+  });
+
+  it('rejects double-cancel', () => {
+    expect(cancelSubPayApp('cancelled', 'x').ok).toBe(false);
+  });
 });

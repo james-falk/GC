@@ -9,16 +9,21 @@ import {
   architectRejectCo,
   buildPropagationOps,
   ownerApproveChangeOrder,
+  ownerApproveOwnerPayApp,
   ownerRejectChangeOrder,
+  ownerRejectOwnerPayApp,
 } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { applyPropagationOp } from '@/lib/co-propagation-tx';
 import {
+  buildApproveUrl,
   generateRawToken,
   hashToken,
+  resolveBaseUrl,
   TOKEN_PATTERN,
   loadValidLink,
 } from '@/lib/magic-link';
+import { notifyMagicLink } from '@/lib/email';
 
 // Magic-link consumer-side actions. Public — no Clerk auth. The token
 // itself is the bearer credential; we hash it and look up the magic_links
@@ -45,6 +50,15 @@ export async function approveViaMagicLink(formData: FormData): Promise<void> {
     token: formData.get('token'),
   });
   const link = await loadValidLink(parsed.token);
+
+  // Owner approving an AIA pay app — separate flow, no propagation to do,
+  // just transition sent_to_owner → owner_approved + audit + consume link.
+  if (
+    link.targetEntityType === 'pay_application' &&
+    link.recipientRole === 'owner'
+  ) {
+    return ownerApproveOwnerPayAppViaMagicLink(parsed.token, link);
+  }
 
   if (link.targetEntityType !== 'change_order') {
     throw new Error(
@@ -152,6 +166,13 @@ export async function rejectViaMagicLink(formData: FormData): Promise<void> {
   });
   const link = await loadValidLink(parsed.token);
 
+  if (
+    link.targetEntityType === 'pay_application' &&
+    link.recipientRole === 'owner'
+  ) {
+    return ownerRejectOwnerPayAppViaMagicLink(parsed.token, link, parsed.comment);
+  }
+
   if (link.targetEntityType !== 'change_order') {
     throw new Error(
       `magic-link target ${link.targetEntityType} not yet supported`,
@@ -233,9 +254,11 @@ async function architectApproveAndForwardToOwner(
   const [co] = await db
     .select({
       id: schema.changeOrders.id,
+      coNumber: schema.changeOrders.coNumber,
       projectId: schema.changeOrders.projectId,
       status: schema.changeOrders.status,
       projectOwnerId: schema.projects.ownerId,
+      projectName: schema.projects.name,
     })
     .from(schema.changeOrders)
     .innerJoin(
@@ -312,6 +335,22 @@ async function architectApproveAndForwardToOwner(
     });
   });
 
+  const [tenantRow] = await db
+    .select({ name: schema.tenants.name })
+    .from(schema.tenants)
+    .where(eq(schema.tenants.id, link.tenantId))
+    .limit(1);
+
+  void notifyMagicLink({
+    to: ownerEmail,
+    recipientLabel: 'Project Owner',
+    documentLabel: `change order ${co.coNumber}`,
+    projectName: co.projectName,
+    contractorName: tenantRow?.name ?? 'Contractor',
+    approvalUrl: buildApproveUrl(rawOwnerToken, resolveBaseUrl()),
+    expiresInHours: ARCHITECT_TO_OWNER_LINK_TTL_HOURS,
+  });
+
   revalidatePath(`/projects/${co.projectId}/change-orders`);
   // Architect's success page tells them their part is done. The owner
   // URL is shown to the GC via the change-orders dashboard banner on
@@ -370,5 +409,121 @@ async function architectRejectViaMagicLink(
   });
 
   revalidatePath(`/projects/${co.projectId}/change-orders`);
+  redirect(`/approve/${token}?status=rejected`);
+}
+
+// Owner approves an AIA pay application via magic-link. Transitions
+// sent_to_owner → owner_approved, marks the link consumed, audits.
+async function ownerApproveOwnerPayAppViaMagicLink(
+  token: string,
+  link: typeof schema.magicLinks.$inferSelect,
+): Promise<void> {
+  const [payApp] = await db
+    .select({
+      id: schema.payApplications.id,
+      projectId: schema.payApplications.projectId,
+      status: schema.payApplications.status,
+      direction: schema.payApplications.direction,
+    })
+    .from(schema.payApplications)
+    .where(
+      and(
+        eq(schema.payApplications.id, link.targetEntityId),
+        eq(schema.payApplications.tenantId, link.tenantId),
+      ),
+    )
+    .limit(1);
+  if (!payApp) throw new Error('Pay app not found');
+  if (payApp.direction !== 'gc_to_owner') {
+    throw new Error('Owner pay-app approval requires direction gc_to_owner');
+  }
+
+  const transition = ownerApproveOwnerPayApp(
+    payApp.status as Parameters<typeof ownerApproveOwnerPayApp>[0],
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.payApplications)
+      .set({ status: 'owner_approved' })
+      .where(eq(schema.payApplications.id, payApp.id));
+
+    await tx
+      .update(schema.magicLinks)
+      .set({ consumedAt: new Date() })
+      .where(eq(schema.magicLinks.id, link.id));
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: link.tenantId,
+      entityType: 'pay_application',
+      entityId: payApp.id,
+      fromStatus: 'sent_to_owner',
+      toStatus: 'owner_approved',
+      actorType: 'external_invitee',
+      actorExternalEmail: link.recipientEmail,
+      comment: 'Approved by owner via magic-link',
+    });
+  });
+
+  revalidatePath(`/projects/${payApp.projectId}/pay-apps`);
+  redirect(`/approve/${token}?status=approved`);
+}
+
+async function ownerRejectOwnerPayAppViaMagicLink(
+  token: string,
+  link: typeof schema.magicLinks.$inferSelect,
+  comment: string,
+): Promise<void> {
+  const [payApp] = await db
+    .select({
+      id: schema.payApplications.id,
+      projectId: schema.payApplications.projectId,
+      status: schema.payApplications.status,
+      direction: schema.payApplications.direction,
+    })
+    .from(schema.payApplications)
+    .where(
+      and(
+        eq(schema.payApplications.id, link.targetEntityId),
+        eq(schema.payApplications.tenantId, link.tenantId),
+      ),
+    )
+    .limit(1);
+  if (!payApp) throw new Error('Pay app not found');
+  if (payApp.direction !== 'gc_to_owner') {
+    throw new Error('Owner pay-app rejection requires direction gc_to_owner');
+  }
+
+  const transition = ownerRejectOwnerPayApp(
+    payApp.status as Parameters<typeof ownerRejectOwnerPayApp>[0],
+    comment,
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.payApplications)
+      .set({ status: 'owner_rejected' })
+      .where(eq(schema.payApplications.id, payApp.id));
+
+    await tx
+      .update(schema.magicLinks)
+      .set({ consumedAt: new Date() })
+      .where(eq(schema.magicLinks.id, link.id));
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: link.tenantId,
+      entityType: 'pay_application',
+      entityId: payApp.id,
+      fromStatus: 'sent_to_owner',
+      toStatus: 'owner_rejected',
+      actorType: 'external_invitee',
+      actorExternalEmail: link.recipientEmail,
+      comment,
+    });
+  });
+
+  revalidatePath(`/projects/${payApp.projectId}/pay-apps`);
   redirect(`/approve/${token}?status=rejected`);
 }
