@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { and, eq, isNull } from 'drizzle-orm';
+import { db, schema } from '@constructor/db';
 
 // Magic-link token primitives. Server-only — depends on node:crypto.
 //
@@ -39,4 +41,35 @@ export function resolveBaseUrl(): string {
     return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
   }
   return 'http://localhost:3000';
+}
+
+export const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+
+/**
+ * Look up a magic_links row by raw token, verify it's unconsumed and
+ * unexpired. Throws on any failure (caller surfaces a friendly error).
+ * Used by both /approve/[token] (CO + future targets) and /sub-pay-app/[token].
+ */
+export async function loadValidLink(rawToken: string) {
+  if (!TOKEN_PATTERN.test(rawToken)) {
+    throw new Error('Invalid token');
+  }
+  const tokenHash = hashToken(rawToken);
+  const [link] = await db
+    .select()
+    .from(schema.magicLinks)
+    .where(
+      and(
+        eq(schema.magicLinks.tokenHash, tokenHash),
+        isNull(schema.magicLinks.consumedAt),
+      ),
+    )
+    .limit(1);
+  if (!link) {
+    throw new Error('Link not found or already used');
+  }
+  if (new Date(link.expiresAt).getTime() < Date.now()) {
+    throw new Error('Link expired');
+  }
+  return link;
 }

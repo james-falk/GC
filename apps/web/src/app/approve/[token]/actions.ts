@@ -3,13 +3,13 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   ownerApproveChangeOrder,
   ownerRejectChangeOrder,
 } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
-import { hashToken } from '@/lib/magic-link';
+import { TOKEN_PATTERN, loadValidLink } from '@/lib/magic-link';
 
 // Magic-link consumer-side actions. Public — no Clerk auth. The token
 // itself is the bearer credential; we hash it and look up the magic_links
@@ -22,33 +22,12 @@ import { hashToken } from '@/lib/magic-link';
 // magic-link's consumed_at, and inserts an approval_events audit row.
 // All-or-nothing — gc-data-model.md § Invariant #4.
 
-async function loadValidLink(rawToken: string) {
-  const tokenHash = hashToken(rawToken);
-  const [link] = await db
-    .select()
-    .from(schema.magicLinks)
-    .where(
-      and(
-        eq(schema.magicLinks.tokenHash, tokenHash),
-        isNull(schema.magicLinks.consumedAt),
-      ),
-    )
-    .limit(1);
-  if (!link) {
-    throw new Error('Link not found or already used');
-  }
-  if (new Date(link.expiresAt).getTime() < Date.now()) {
-    throw new Error('Link expired');
-  }
-  return link;
-}
-
 const ApproveInput = z.object({
-  token: z.string().regex(/^[a-f0-9]{64}$/, 'invalid token'),
+  token: z.string().regex(TOKEN_PATTERN, 'invalid token'),
 });
 
 const RejectInput = z.object({
-  token: z.string().regex(/^[a-f0-9]{64}$/, 'invalid token'),
+  token: z.string().regex(TOKEN_PATTERN, 'invalid token'),
   comment: z.string().trim().min(1, 'comment is required').max(2000),
 });
 

@@ -6,3 +6,4 @@ export * from './owner-pay-app';
 export * from './change-order';
 export * from './sworn-statement';
 export * from './change-order-reducer';
+export * from './sub-pay-app-reducer';

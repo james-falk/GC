@@ -1,14 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
+import { submitSubPayAppAction } from '../actions';
 
 // Mobile-first sub pay-app form. See gc-wireframes-brief.md § Screen 6.
 //
-// Phase C scope: clickable mock. No magic-link verification, no submission.
-// Wires the live computed fields (this period $, retention $, net to invoice)
-// so the interaction model is real. Persistence + magic-link consumption land
-// when subcontract data is in the DB and we have a real pay_application row
-// to bind the form to.
+// Real submit: posts each line's percent + stored materials as
+// percent[<sovLineId>] / stored[<sovLineId>] form fields. The server
+// re-runs the per-line + aggregate ceiling checks (checkSubBillableCeiling)
+// and inserts pay_application_lines + transitions the pay app to submitted.
 
 const RETENTION_PCT = 10;
 
@@ -20,11 +20,15 @@ type Line = {
 };
 
 type Props = {
+  token: string;
   projectName: string;
+  projectNumber: string;
   contractor: string;
-  period: string; // human-readable, e.g. "March 1–31, 2026"
+  contractNumber: string;
+  period: string;
   contractAmount: number;
   lines: Line[];
+  statusLabel: string;
 };
 
 export function SubPayAppForm(props: Props) {
@@ -34,6 +38,8 @@ export function SubPayAppForm(props: Props) {
   const [storedMaterials, setStoredMaterials] = useState<Record<string, number>>(
     () => Object.fromEntries(props.lines.map((l) => [l.id, 0])),
   );
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   const computed = useMemo(() => {
     let totalThisPeriod = 0;
@@ -57,9 +63,11 @@ export function SubPayAppForm(props: Props) {
     };
   }, [props.lines, percents, storedMaterials]);
 
+  const anyOverCeiling = computed.perLine.some((c) => c.overCeiling);
+  const editable = props.statusLabel === 'draft' || props.statusLabel === 'needs_revision';
+
   return (
     <div className="mx-auto max-w-2xl px-4 py-6">
-      {/* Header */}
       <header className="mb-6">
         <div className="text-sm font-semibold tracking-tight text-slate-900">constructor</div>
         <h1 className="mt-3 text-xl font-semibold tracking-tight">{props.projectName}</h1>
@@ -67,20 +75,26 @@ export function SubPayAppForm(props: Props) {
           {props.contractor} — period {props.period}
         </div>
         <div className="mt-1 text-xs text-slate-500">
-          Contract amount: ${formatMoney(props.contractAmount)}
+          Project #{props.projectNumber} · Contract {props.contractNumber} · Total ${formatMoney(props.contractAmount)}
         </div>
       </header>
 
-      {/* Status banner — draft (default state) */}
-      <div className="mb-6 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-        Draft — fill in this period's percentages, then submit for review.
-      </div>
+      {editable ? (
+        <div className="mb-6 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          {props.statusLabel === 'needs_revision'
+            ? 'GC requested revisions — adjust percentages and re-submit.'
+            : 'Draft — fill in this period\'s percentages, then submit for review.'}
+        </div>
+      ) : (
+        <div className="mb-6 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          Read-only — pay app is in <strong>{props.statusLabel}</strong> state.
+        </div>
+      )}
 
       {/* Line items */}
       <div className="space-y-4">
         {props.lines.map((line) => {
-          const computedLine = computed.perLine.find((c) => c.id === line.id);
-          if (!computedLine) return null;
+          const c = computed.perLine.find((x) => x.id === line.id)!;
           const pct = percents[line.id] ?? 0;
           const stored = storedMaterials[line.id] ?? 0;
           return (
@@ -88,9 +102,7 @@ export function SubPayAppForm(props: Props) {
               key={line.id}
               className={
                 'rounded-lg border bg-white p-4 ' +
-                (computedLine.overCeiling
-                  ? 'border-red-300 bg-red-50'
-                  : 'border-slate-200')
+                (c.overCeiling ? 'border-red-300 bg-red-50' : 'border-slate-200')
               }
             >
               <div className="text-sm font-medium text-slate-900">{line.description}</div>
@@ -107,10 +119,7 @@ export function SubPayAppForm(props: Props) {
 
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div>
-                  <label
-                    htmlFor={`pct-${line.id}`}
-                    className="block text-xs font-medium text-slate-700"
-                  >
+                  <label htmlFor={`pct-${line.id}`} className="block text-xs font-medium text-slate-700">
                     This period %
                   </label>
                   <input
@@ -120,20 +129,18 @@ export function SubPayAppForm(props: Props) {
                     max="100"
                     step="1"
                     value={pct}
+                    disabled={!editable || pending}
                     onChange={(e) =>
                       setPercents((prev) => ({
                         ...prev,
                         [line.id]: clampPercent(Number(e.target.value)),
                       }))
                     }
-                    className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60"
                   />
                 </div>
                 <div>
-                  <label
-                    htmlFor={`stored-${line.id}`}
-                    className="block text-xs font-medium text-slate-700"
-                  >
+                  <label htmlFor={`stored-${line.id}`} className="block text-xs font-medium text-slate-700">
                     Stored materials $
                   </label>
                   <input
@@ -143,13 +150,14 @@ export function SubPayAppForm(props: Props) {
                     step="0.01"
                     value={stored || ''}
                     placeholder="0.00"
+                    disabled={!editable || pending}
                     onChange={(e) =>
                       setStoredMaterials((prev) => ({
                         ...prev,
                         [line.id]: Math.max(0, Number(e.target.value)),
                       }))
                     }
-                    className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-base shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -157,19 +165,15 @@ export function SubPayAppForm(props: Props) {
               <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-slate-100 pt-3 text-sm">
                 <div>
                   <dt className="text-xs text-slate-500">This period $</dt>
-                  <dd className="font-semibold tabular-nums">
-                    ${formatMoney(computedLine.thisPeriod)}
-                  </dd>
+                  <dd className="font-semibold tabular-nums">${formatMoney(c.thisPeriod)}</dd>
                 </div>
                 <div>
                   <dt className="text-xs text-slate-500">Retention $</dt>
-                  <dd className="tabular-nums text-slate-700">
-                    ${formatMoney(computedLine.retention)}
-                  </dd>
+                  <dd className="tabular-nums text-slate-700">${formatMoney(c.retention)}</dd>
                 </div>
               </dl>
 
-              {computedLine.overCeiling && (
+              {c.overCeiling && (
                 <p className="mt-3 text-xs font-medium text-red-700">
                   This exceeds your contract ceiling. Submit a change order with
                   the GC if additional work is approved.
@@ -181,7 +185,7 @@ export function SubPayAppForm(props: Props) {
       </div>
 
       {/* Spacer so sticky footer doesn't cover content */}
-      <div className="h-32" />
+      <div className="h-36" />
 
       {/* Sticky footer */}
       <div className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white px-4 py-3 shadow-lg">
@@ -206,29 +210,52 @@ export function SubPayAppForm(props: Props) {
               </dd>
             </div>
           </dl>
+          {error && (
+            <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+              {error}
+            </div>
+          )}
           <div className="mt-3 flex gap-2">
             <button
               type="button"
-              disabled
-              className="flex-1 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-400"
+              onClick={onSubmit}
+              disabled={!editable || pending || anyOverCeiling}
+              className="flex-1 rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800 disabled:opacity-50"
             >
-              Save draft
-            </button>
-            <button
-              type="button"
-              disabled
-              className="flex-1 rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white opacity-60"
-            >
-              Submit for review
+              {pending ? 'Submitting…' : 'Submit for review'}
             </button>
           </div>
           <p className="mt-2 text-center text-[10px] text-slate-400">
-            Save and submit are wired in a later session.
+            Single-use link. Once you submit, the link can&rsquo;t be used again.
           </p>
         </div>
       </div>
     </div>
   );
+
+  function onSubmit() {
+    setError(null);
+    if (anyOverCeiling) {
+      setError('Fix the over-ceiling lines (highlighted in red) before submitting.');
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const formData = new FormData();
+        formData.set('token', props.token);
+        for (const line of props.lines) {
+          formData.set(`percent[${line.id}]`, String(percents[line.id] ?? 0));
+          formData.set(`stored[${line.id}]`, String(storedMaterials[line.id] ?? 0));
+        }
+        await submitSubPayAppAction(formData);
+        // Action redirects on success.
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Submit failed';
+        if (message.includes('NEXT_REDIRECT')) return;
+        setError(message);
+      }
+    });
+  }
 }
 
 function clampPercent(n: number): number {
