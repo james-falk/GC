@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./aia-g702": "./src/aia-g702.tsx",
+    "./aia-g703": "./src/aia-g703.tsx",
     "./sworn-statement": "./src/sworn-statement.tsx"
   },
   "scripts": {
