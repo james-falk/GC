@@ -24,6 +24,11 @@ const AddSovLineInput = z.object({
     .uuid()
     .optional()
     .or(z.literal('').transform(() => undefined)),
+  parentLineId: z
+    .string()
+    .uuid()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
 });
 
 export async function addSovLine(formData: FormData) {
@@ -34,6 +39,7 @@ export async function addSovLine(formData: FormData) {
     description: formData.get('description'),
     contractAmount: formData.get('contractAmount'),
     subcontractId: formData.get('subcontractId'),
+    parentLineId: formData.get('parentLineId'),
   });
 
   // Confirm the project belongs to this tenant AND isn't archived before
@@ -72,6 +78,32 @@ export async function addSovLine(formData: FormData) {
     }
   }
 
+  // If a parent line was picked, verify it belongs to this same project +
+  // tenant AND is itself a top-level line (parent_line_id IS NULL). Only
+  // a single level of nesting is supported — that matches Spartan's "3a/3b"
+  // pattern and avoids the renderer needing to think about deeper trees.
+  if (parsed.parentLineId) {
+    const [parent] = await db
+      .select({ parentLineId: schema.sovLines.parentLineId })
+      .from(schema.sovLines)
+      .where(
+        and(
+          eq(schema.sovLines.id, parsed.parentLineId),
+          eq(schema.sovLines.projectId, parsed.projectId),
+          eq(schema.sovLines.tenantId, tenant.id),
+        ),
+      )
+      .limit(1);
+    if (!parent) {
+      throw new Error('Parent SoV line not found on this project');
+    }
+    if (parent.parentLineId !== null) {
+      throw new Error(
+        'Cannot nest under a child line — parent must be a top-level SoV line',
+      );
+    }
+  }
+
   await db.insert(schema.sovLines).values({
     tenantId: tenant.id,
     projectId: parsed.projectId,
@@ -82,6 +114,7 @@ export async function addSovLine(formData: FormData) {
     // to the original contract amount and updated atomically on CO approval.
     currentAmount: parsed.contractAmount,
     subcontractId: parsed.subcontractId ?? null,
+    parentLineId: parsed.parentLineId ?? null,
   });
 
   revalidatePath(`/projects/${parsed.projectId}`);

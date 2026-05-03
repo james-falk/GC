@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { and, asc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
@@ -6,28 +7,41 @@ import { addSovLine } from './actions';
 // SoV editor — display table + add-line form. Default tab on the project
 // detail page. See gc-wireframes-brief.md § Screen 4.
 //
-// Step 3 of the backend persistence pass:
-//   - Each row joins through to its (optional) subcontract + subcontractor
-//     for the chip in the Subcontractor column.
-//   - Add-line form gets an optional subcontract dropdown. Empty value
-//     means GC-internal cost line (bonding, permits, OH&P, etc.).
-// Still deferred: parent/child hierarchy, inline edit, drift indicator,
-// retention/stored-materials columns, "Import from contract".
+// Parent/child hierarchy: top-level lines (parent_line_id IS NULL) appear
+// at the top level; their children render indented underneath. Single-level
+// nesting only — matches Spartan's "3" → "3a/3b/3c" pattern.
+//
+// To add a child line, click "+ Add child" on a parent row. The URL gets
+// ?addChildOf=<parentId> and the add-line form pre-fills its hidden
+// parentLineId. Cancel by navigating back to the base tab URL.
 
 const inputClass =
   'block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500';
 
-type PageProps = {
-  params: Promise<{ id: string }>;
+type SovLineRow = {
+  id: string;
+  lineNumber: string;
+  description: string;
+  contractAmount: string;
+  currentAmount: string;
+  subcontractId: string | null;
+  parentLineId: string | null;
+  subcontractorName: string | null;
 };
 
-export default async function ProjectSovPage({ params }: PageProps) {
+type PageProps = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ addChildOf?: string }>;
+};
+
+export default async function ProjectSovPage({ params, searchParams }: PageProps) {
   const { id: projectId } = await params;
+  const { addChildOf } = await searchParams;
   const tenant = await getCurrentTenant();
 
   // Lines for the table — left-join to subcontracts + subcontractors so we
   // can render a "subcontractor name" chip when the line points at one.
-  const lines = await db
+  const lines: SovLineRow[] = await db
     .select({
       id: schema.sovLines.id,
       lineNumber: schema.sovLines.lineNumber,
@@ -35,6 +49,7 @@ export default async function ProjectSovPage({ params }: PageProps) {
       contractAmount: schema.sovLines.contractAmount,
       currentAmount: schema.sovLines.currentAmount,
       subcontractId: schema.sovLines.subcontractId,
+      parentLineId: schema.sovLines.parentLineId,
       subcontractorName: schema.subcontractors.name,
     })
     .from(schema.sovLines)
@@ -53,6 +68,17 @@ export default async function ProjectSovPage({ params }: PageProps) {
       ),
     )
     .orderBy(asc(schema.sovLines.lineNumber));
+
+  // Group children under parents in a single pass.
+  const parents = lines.filter((l) => l.parentLineId === null);
+  const childrenByParent = new Map<string, SovLineRow[]>();
+  for (const l of lines) {
+    if (l.parentLineId !== null) {
+      const arr = childrenByParent.get(l.parentLineId) ?? [];
+      arr.push(l);
+      childrenByParent.set(l.parentLineId, arr);
+    }
+  }
 
   // Subcontracts for this project, for the add-line dropdown.
   const projectSubcontracts = await db
@@ -74,7 +100,16 @@ export default async function ProjectSovPage({ params }: PageProps) {
     )
     .orderBy(asc(schema.subcontracts.contractNumber));
 
-  const totals = lines.reduce(
+  // Resolve parent context if "+ Add child" was clicked. We need the parent
+  // line's metadata for the form heading + we silently strip the param if
+  // it doesn't belong to this project (defense against URL tampering).
+  const addChildParent =
+    addChildOf && parents.find((p) => p.id === addChildOf)
+      ? (parents.find((p) => p.id === addChildOf) as SovLineRow)
+      : null;
+
+  // Totals only count parent lines so children don't double-count.
+  const totals = parents.reduce(
     (acc, l) => ({
       contract: acc.contract + Number(l.contractAmount),
       current: acc.current + Number(l.currentAmount),
@@ -90,7 +125,7 @@ export default async function ProjectSovPage({ params }: PageProps) {
           <p className="text-sm text-slate-600">
             {lines.length === 0
               ? 'No line items yet — add the first one below.'
-              : `${lines.length} line${lines.length === 1 ? '' : 's'}.`}
+              : `${parents.length} top-level line${parents.length === 1 ? '' : 's'}, ${lines.length - parents.length} child line${lines.length - parents.length === 1 ? '' : 's'}.`}
           </p>
         </div>
       </div>
@@ -115,37 +150,21 @@ export default async function ProjectSovPage({ params }: PageProps) {
                 <th className="border-b border-slate-200 px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
                   Current $
                 </th>
+                <th className="border-b border-slate-200 px-4 py-3"></th>
               </tr>
             </thead>
             <tbody>
-              {lines.map((l) => (
-                <tr key={l.id} className="hover:bg-slate-50">
-                  <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium text-slate-700 tabular-nums">
-                    {l.lineNumber}
-                  </td>
-                  <td className="border-b border-slate-100 px-4 py-3 text-sm">{l.description}</td>
-                  <td className="border-b border-slate-100 px-4 py-3 text-sm">
-                    {l.subcontractorName ? (
-                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                        {l.subcontractorName}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-slate-400">GC-internal</span>
-                    )}
-                  </td>
-                  <td className="border-b border-slate-100 px-4 py-3 text-right text-sm tabular-nums">
-                    ${formatMoney(l.contractAmount)}
-                  </td>
-                  <td className="border-b border-slate-100 px-4 py-3 text-right text-sm tabular-nums">
-                    ${formatMoney(l.currentAmount)}
-                  </td>
-                </tr>
-              ))}
+              {parents.map((p) => {
+                const kids = childrenByParent.get(p.id) ?? [];
+                return (
+                  <Fragment key={p.id} parent={p} kids={kids} projectId={projectId} />
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="bg-slate-50 text-sm font-medium">
                 <td className="px-4 py-3" colSpan={3}>
-                  Totals
+                  Totals (parents only)
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   ${formatMoneyNumber(totals.contract)}
@@ -153,6 +172,7 @@ export default async function ProjectSovPage({ params }: PageProps) {
                 <td className="px-4 py-3 text-right tabular-nums">
                   ${formatMoneyNumber(totals.current)}
                 </td>
+                <td className="px-4 py-3"></td>
               </tr>
             </tfoot>
           </table>
@@ -160,9 +180,26 @@ export default async function ProjectSovPage({ params }: PageProps) {
       )}
 
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-        <h3 className="text-sm font-semibold text-slate-900">Add line</h3>
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-sm font-semibold text-slate-900">
+            {addChildParent
+              ? `Add child line under "${addChildParent.lineNumber} — ${addChildParent.description}"`
+              : 'Add line'}
+          </h3>
+          {addChildParent && (
+            <Link
+              href={`/projects/${projectId}`}
+              className="text-xs text-slate-600 transition hover:text-slate-900"
+            >
+              Cancel — add a top-level line
+            </Link>
+          )}
+        </div>
         <form action={addSovLine} className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-12">
           <input type="hidden" name="projectId" value={projectId} />
+          {addChildParent && (
+            <input type="hidden" name="parentLineId" value={addChildParent.id} />
+          )}
 
           <div className="sm:col-span-2">
             <label htmlFor="lineNumber" className="block text-xs font-medium text-slate-700">
@@ -173,7 +210,7 @@ export default async function ProjectSovPage({ params }: PageProps) {
               name="lineNumber"
               required
               maxLength={32}
-              placeholder="1"
+              placeholder={addChildParent ? `${addChildParent.lineNumber}a` : '1'}
               className={inputClass + ' mt-1'}
             />
           </div>
@@ -199,7 +236,7 @@ export default async function ProjectSovPage({ params }: PageProps) {
             <select
               id="subcontractId"
               name="subcontractId"
-              defaultValue=""
+              defaultValue={addChildParent?.subcontractId ?? ''}
               className={inputClass + ' mt-1'}
             >
               <option value="">GC-internal</option>
@@ -238,6 +275,78 @@ export default async function ProjectSovPage({ params }: PageProps) {
         </form>
       </div>
     </div>
+  );
+}
+
+function Fragment({
+  parent,
+  kids,
+  projectId,
+}: {
+  parent: SovLineRow;
+  kids: SovLineRow[];
+  projectId: string;
+}) {
+  return (
+    <>
+      <tr className="hover:bg-slate-50">
+        <td className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-900 tabular-nums">
+          {parent.lineNumber}
+        </td>
+        <td className="border-b border-slate-100 px-4 py-3 text-sm font-medium text-slate-900">
+          {parent.description}
+        </td>
+        <td className="border-b border-slate-100 px-4 py-3 text-sm">
+          {parent.subcontractorName ? (
+            <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+              {parent.subcontractorName}
+            </span>
+          ) : (
+            <span className="text-xs text-slate-400">GC-internal</span>
+          )}
+        </td>
+        <td className="border-b border-slate-100 px-4 py-3 text-right text-sm font-medium tabular-nums">
+          ${formatMoney(parent.contractAmount)}
+        </td>
+        <td className="border-b border-slate-100 px-4 py-3 text-right text-sm font-medium tabular-nums">
+          ${formatMoney(parent.currentAmount)}
+        </td>
+        <td className="border-b border-slate-100 px-4 py-3 text-right">
+          <Link
+            href={`/projects/${projectId}?addChildOf=${parent.id}`}
+            className="text-xs font-medium text-blue-700 hover:underline"
+          >
+            + Add child
+          </Link>
+        </td>
+      </tr>
+      {kids.map((c) => (
+        <tr key={c.id} className="bg-slate-50/40 hover:bg-slate-50">
+          <td className="border-b border-slate-100 py-2 pl-10 pr-4 text-xs text-slate-600 tabular-nums">
+            {c.lineNumber}
+          </td>
+          <td className="border-b border-slate-100 px-4 py-2 text-sm text-slate-700">
+            {c.description}
+          </td>
+          <td className="border-b border-slate-100 px-4 py-2 text-sm">
+            {c.subcontractorName ? (
+              <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                {c.subcontractorName}
+              </span>
+            ) : (
+              <span className="text-xs text-slate-400">GC-internal</span>
+            )}
+          </td>
+          <td className="border-b border-slate-100 px-4 py-2 text-right text-sm tabular-nums text-slate-700">
+            ${formatMoney(c.contractAmount)}
+          </td>
+          <td className="border-b border-slate-100 px-4 py-2 text-right text-sm tabular-nums text-slate-700">
+            ${formatMoney(c.currentAmount)}
+          </td>
+          <td className="border-b border-slate-100 px-4 py-2"></td>
+        </tr>
+      ))}
+    </>
   );
 }
 
