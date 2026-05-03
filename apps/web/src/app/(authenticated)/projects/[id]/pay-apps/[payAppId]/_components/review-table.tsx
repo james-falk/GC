@@ -1,22 +1,32 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
+import {
+  approveSubPayApp,
+  requestRevisionSubPayApp,
+} from '../../actions';
 
 // Editable pay-app review table. See gc-wireframes-brief.md § Screen 7.
 //
 // Each row shows the sub-reported percentage alongside an editable
-// gc-adjusted percentage (defaults to sub-reported). When the GC lowers a
-// value, the row visually flags the adjustment. This period $ recomputes
-// from the adjusted percentage.
+// gc-adjusted percentage (defaults to sub-reported). When the GC lowers
+// a value, the row visually flags the adjustment. This period $
+// recomputes from the adjusted percentage.
+//
+// Phase 2b note: GC-adjusted percentages aren't persisted yet — Approve
+// stamps the pay app as-is. Persisting per-line overrides on approve
+// lands when we extend the action to also UPDATE pay_application_lines.
 
 const RETENTION_PCT = 10;
 
 type Line = {
   id: string;
+  sovLineId: string;
   description: string;
-  currentAmount: number; // dollars
+  currentAmount: number;
   previouslyBilled: number;
-  subReportedPercent: number; // 0–100
+  subReportedPercent: number;
+  initialGcAdjustedPercent: number;
 };
 
 type Row = Line & {
@@ -25,17 +35,23 @@ type Row = Line & {
 };
 
 type Props = {
+  payAppId: string;
+  projectId: string;
   lines: Line[];
+  editable: boolean;
 };
 
 export function ReviewTable(props: Props) {
   const [rows, setRows] = useState<Row[]>(() =>
     props.lines.map((l) => ({
       ...l,
-      gcAdjustedPercent: l.subReportedPercent,
+      gcAdjustedPercent: l.initialGcAdjustedPercent,
       note: '',
     })),
   );
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [comment, setComment] = useState('');
 
   const totals = useMemo(() => {
     let subBilled = 0;
@@ -80,9 +96,6 @@ export function ReviewTable(props: Props) {
               <th className="border-b border-slate-200 px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-slate-500">
                 This period $
               </th>
-              <th className="border-b border-slate-200 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-                Note
-              </th>
             </tr>
           </thead>
           <tbody>
@@ -112,13 +125,14 @@ export function ReviewTable(props: Props) {
                       min="0"
                       max="100"
                       value={r.gcAdjustedPercent}
+                      disabled={!props.editable || pending}
                       onChange={(e) =>
                         setRow(r.id, {
                           gcAdjustedPercent: clamp(Number(e.target.value)),
                         })
                       }
                       className={
-                        'block w-24 rounded border px-2 py-1 text-right text-sm tabular-nums focus:outline-none focus:ring-1 ' +
+                        'block w-24 rounded border px-2 py-1 text-right text-sm tabular-nums focus:outline-none focus:ring-1 disabled:opacity-60 ' +
                         (adjustedDown
                           ? 'border-amber-400 bg-amber-50 text-amber-900 focus:border-amber-500 focus:ring-amber-500'
                           : adjustedUp
@@ -135,34 +149,10 @@ export function ReviewTable(props: Props) {
                   <td className="border-b border-slate-100 px-3 py-2 text-right tabular-nums font-medium">
                     ${formatMoney(thisPeriod)}
                   </td>
-                  <td className="border-b border-slate-100 px-3 py-2">
-                    <input
-                      type="text"
-                      value={r.note}
-                      onChange={(e) => setRow(r.id, { note: e.target.value })}
-                      placeholder={adjustedDown ? 'why reduced…' : 'optional'}
-                      className="block w-full rounded border border-slate-200 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none"
-                    />
-                  </td>
                 </tr>
               );
             })}
           </tbody>
-          <tfoot>
-            <tr className="bg-slate-50 text-sm font-medium">
-              <td className="px-3 py-2" colSpan={3}>
-                Totals
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums text-slate-500">
-                sub: ${formatMoney(totals.subBilled)}
-              </td>
-              <td className="px-3 py-2"></td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                ${formatMoney(totals.gcBilled)}
-              </td>
-              <td className="px-3 py-2"></td>
-            </tr>
-          </tfoot>
         </table>
       </div>
 
@@ -178,37 +168,84 @@ export function ReviewTable(props: Props) {
           <div className="tabular-nums text-slate-700">${formatMoney(totals.retention)}</div>
         </div>
         <div>
-          <div className="text-xs uppercase tracking-wide text-slate-500">
-            Net to approve
-          </div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Net to approve</div>
           <div className="font-semibold tabular-nums text-blue-700">
             ${formatMoney(totals.net)}
           </div>
         </div>
       </div>
 
-      <div className="flex gap-3 border-t border-slate-200 pt-5">
-        <button
-          type="button"
-          disabled
-          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-400"
-        >
-          Request revision
-        </button>
-        <button
-          type="button"
-          disabled
-          className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white opacity-60"
-        >
-          Approve sub pay app
-        </button>
-      </div>
-      <p className="text-[11px] text-slate-400">
-        Approve / request-revision are wired in a later session — adjustments
-        compute live so the interaction model is real.
-      </p>
+      {props.editable && (
+        <>
+          <div>
+            <label htmlFor="reviewComment" className="block text-xs font-medium text-slate-700">
+              Comment (required only for revision request)
+            </label>
+            <textarea
+              id="reviewComment"
+              rows={2}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="What you'd like the sub to adjust before re-submitting"
+              disabled={pending}
+              className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-60"
+            />
+          </div>
+
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+              {error}
+            </div>
+          )}
+
+          <div className="flex gap-3 border-t border-slate-200 pt-5">
+            <button
+              type="button"
+              onClick={() => handleAction('reject')}
+              disabled={pending}
+              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+            >
+              Request revision
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAction('approve')}
+              disabled={pending}
+              className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800 disabled:opacity-60"
+            >
+              {pending ? 'Working…' : 'Approve sub pay app'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
+
+  function handleAction(kind: 'approve' | 'reject') {
+    setError(null);
+    if (kind === 'reject' && !comment.trim()) {
+      setError('Add a comment explaining what needs to change.');
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const formData = new FormData();
+        formData.set('payAppId', props.payAppId);
+        formData.set('projectId', props.projectId);
+        if (kind === 'approve') {
+          await approveSubPayApp(formData);
+        } else {
+          formData.set('comment', comment.trim());
+          await requestRevisionSubPayApp(formData);
+        }
+        // Action redirects on success.
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Action failed';
+        if (message.includes('NEXT_REDIRECT')) return;
+        setError(message);
+      }
+    });
+  }
 }
 
 function clamp(n: number): number {

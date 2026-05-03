@@ -3,9 +3,14 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
+import {
+  pmApproveSubPayApp,
+  pmRequestRevisionSubPayApp,
+} from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
+import { ensureCurrentUser } from '@/lib/user';
 import { generateRawToken, hashToken } from '@/lib/magic-link';
 
 // Pay-app lifecycle actions for sub_to_gc + gc_to_owner pay applications.
@@ -166,6 +171,193 @@ export async function startMonthlyPayApp(formData: FormData): Promise<void> {
     params.set('skipped', skipped.join(','));
   }
 
+  revalidatePath(`/projects/${parsed.projectId}/pay-apps`);
+  redirect(`/projects/${parsed.projectId}/pay-apps?${params.toString()}`);
+}
+
+// PM approves a submitted sub pay-app. Reducer guards the transition,
+// then we update status + insert audit row in one tx.
+
+const ApproveSubPayAppInput = z.object({
+  payAppId: z.string().uuid(),
+  projectId: z.string().uuid(),
+});
+
+export async function approveSubPayApp(formData: FormData): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = ApproveSubPayAppInput.parse({
+    payAppId: formData.get('payAppId'),
+    projectId: formData.get('projectId'),
+  });
+
+  // Read pay app inside tenant + project scope; require project active.
+  const [payApp] = await db
+    .select({
+      id: schema.payApplications.id,
+      status: schema.payApplications.status,
+      direction: schema.payApplications.direction,
+    })
+    .from(schema.payApplications)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.payApplications.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.payApplications.id, parsed.payAppId),
+        eq(schema.payApplications.projectId, parsed.projectId),
+        eq(schema.payApplications.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!payApp) throw new Error('Pay app not found or project archived');
+  if (payApp.direction !== 'sub_to_gc') {
+    throw new Error('approveSubPayApp only handles sub_to_gc pay apps');
+  }
+
+  const transition = pmApproveSubPayApp(
+    payApp.status as Parameters<typeof pmApproveSubPayApp>[0],
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.payApplications)
+      .set({
+        status: 'approved',
+        approvedAt: new Date(),
+      })
+      .where(eq(schema.payApplications.id, payApp.id));
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'pay_application',
+      entityId: payApp.id,
+      fromStatus: 'submitted',
+      toStatus: 'approved',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: 'Approved by PM',
+    });
+  });
+
+  revalidatePath(`/projects/${parsed.projectId}/pay-apps`);
+  revalidatePath(`/projects/${parsed.projectId}/pay-apps/${payApp.id}`);
+  redirect(`/projects/${parsed.projectId}/pay-apps`);
+}
+
+// PM requests revision on a submitted sub pay-app. Comment required.
+// Re-issues a fresh magic-link so the sub can edit + re-submit; the
+// raw token rides the redirect so the GC can copy it (until Resend).
+
+const RequestRevisionInput = z.object({
+  payAppId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  comment: z.string().trim().min(1, 'comment is required').max(2000),
+});
+
+export async function requestRevisionSubPayApp(
+  formData: FormData,
+): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = RequestRevisionInput.parse({
+    payAppId: formData.get('payAppId'),
+    projectId: formData.get('projectId'),
+    comment: formData.get('comment'),
+  });
+
+  const [payApp] = await db
+    .select({
+      id: schema.payApplications.id,
+      status: schema.payApplications.status,
+      subcontractId: schema.payApplications.subcontractId,
+    })
+    .from(schema.payApplications)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.payApplications.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.payApplications.id, parsed.payAppId),
+        eq(schema.payApplications.projectId, parsed.projectId),
+        eq(schema.payApplications.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!payApp || !payApp.subcontractId) {
+    throw new Error('Pay app not found or project archived');
+  }
+
+  const transition = pmRequestRevisionSubPayApp(
+    payApp.status as Parameters<typeof pmRequestRevisionSubPayApp>[0],
+    parsed.comment,
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  // Look up the sub's email for the new magic-link.
+  const [subEmail] = await db
+    .select({ email: schema.subcontractors.contactEmail })
+    .from(schema.subcontracts)
+    .innerJoin(
+      schema.subcontractors,
+      eq(schema.subcontracts.subcontractorId, schema.subcontractors.id),
+    )
+    .where(eq(schema.subcontracts.id, payApp.subcontractId))
+    .limit(1);
+  if (!subEmail || !subEmail.email) {
+    throw new Error('Subcontractor has no contact email — add one first');
+  }
+  const recipientEmail = subEmail.email;
+
+  const rawToken = generateRawToken();
+  const tokenHash = hashToken(rawToken);
+  const expiresAt = new Date(
+    Date.now() + MAGIC_LINK_TTL_HOURS * 60 * 60 * 1000,
+  );
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.payApplications)
+      .set({ status: 'needs_revision' })
+      .where(eq(schema.payApplications.id, payApp.id));
+
+    await tx.insert(schema.magicLinks).values({
+      tenantId: tenant.id,
+      targetEntityType: 'pay_application',
+      targetEntityId: payApp.id,
+      recipientEmail,
+      recipientRole: 'sub_user',
+      tokenHash,
+      action: 'approve_or_reject',
+      expiresAt,
+    });
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'pay_application',
+      entityId: payApp.id,
+      fromStatus: 'submitted',
+      toStatus: 'needs_revision',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: parsed.comment,
+    });
+  });
+
+  // Carry the new raw token back to the list view so it can be re-shared.
+  const params = new URLSearchParams({
+    revisionPayApp: payApp.id,
+    revisionToken: rawToken,
+  });
   revalidatePath(`/projects/${parsed.projectId}/pay-apps`);
   redirect(`/projects/${parsed.projectId}/pay-apps?${params.toString()}`);
 }

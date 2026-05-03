@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { submitSubPayApp } from './sub-pay-app-reducer';
+import {
+  pmApproveSubPayApp,
+  pmRequestRevisionSubPayApp,
+  submitSubPayApp,
+} from './sub-pay-app-reducer';
 
 describe('submitSubPayApp', () => {
   const fixedNow = new Date('2026-05-01T12:00:00.000Z');
@@ -36,4 +40,63 @@ describe('submitSubPayApp', () => {
       expect(result.ok).toBe(false);
     });
   }
+});
+
+describe('pmApproveSubPayApp', () => {
+  const fixedNow = new Date('2026-05-01T12:00:00.000Z');
+
+  it('transitions submitted → approved', () => {
+    const result = pmApproveSubPayApp('submitted', fixedNow);
+    expect(result).toEqual({
+      ok: true,
+      nextState: { kind: 'approved', at: fixedNow },
+    });
+  });
+
+  const badKinds = [
+    'draft',
+    'needs_revision',
+    'approved_by_pm',
+    'approved_by_principal',
+    'approved',
+    'paid',
+    'cancelled',
+  ] as const;
+
+  for (const kind of badKinds) {
+    it(`rejects approve from kind '${kind}'`, () => {
+      const result = pmApproveSubPayApp(kind);
+      expect(result.ok).toBe(false);
+    });
+  }
+});
+
+describe('pmRequestRevisionSubPayApp', () => {
+  const fixedNow = new Date('2026-05-01T12:00:00.000Z');
+
+  it('transitions submitted → needs_revision with comment', () => {
+    const result = pmRequestRevisionSubPayApp(
+      'submitted',
+      'percent on line 3a is too high',
+      fixedNow,
+    );
+    expect(result).toEqual({
+      ok: true,
+      nextState: {
+        kind: 'needs_revision',
+        comment: 'percent on line 3a is too high',
+        at: fixedNow,
+      },
+    });
+  });
+
+  it('requires non-empty comment', () => {
+    const result = pmRequestRevisionSubPayApp('submitted', '   ', fixedNow);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects from non-submitted', () => {
+    const result = pmRequestRevisionSubPayApp('draft', 'no', fixedNow);
+    expect(result.ok).toBe(false);
+  });
 });
