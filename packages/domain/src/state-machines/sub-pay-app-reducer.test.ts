@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   pmApproveSubPayApp,
   pmRequestRevisionSubPayApp,
+  rollIntoOwnerPayApp,
   submitSubPayApp,
 } from './sub-pay-app-reducer';
 
@@ -99,4 +100,38 @@ describe('pmRequestRevisionSubPayApp', () => {
     const result = pmRequestRevisionSubPayApp('draft', 'no', fixedNow);
     expect(result.ok).toBe(false);
   });
+});
+
+describe('rollIntoOwnerPayApp', () => {
+  const fixedNow = new Date('2026-05-01T12:00:00.000Z');
+
+  it('transitions approved → included_in_owner_pay_app with ownerPayAppId', () => {
+    const result = rollIntoOwnerPayApp('approved', 'pa_owner_xyz', fixedNow);
+    expect(result).toEqual({
+      ok: true,
+      nextState: {
+        kind: 'included_in_owner_pay_app',
+        ownerPayAppId: 'pa_owner_xyz',
+        at: fixedNow,
+      },
+    });
+  });
+
+  const badKinds = [
+    'draft',
+    'submitted',
+    'needs_revision',
+    'approved_by_pm',
+    'approved_by_principal',
+    'included_in_owner_pay_app',
+    'paid',
+    'cancelled',
+  ] as const;
+
+  for (const kind of badKinds) {
+    it(`rejects roll-up from kind '${kind}'`, () => {
+      const result = rollIntoOwnerPayApp(kind, 'pa_x');
+      expect(result.ok).toBe(false);
+    });
+  }
 });

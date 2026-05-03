@@ -3,15 +3,17 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import {
   pmApproveSubPayApp,
   pmRequestRevisionSubPayApp,
+  rollIntoOwnerPayApp,
 } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { ensureCurrentUser } from '@/lib/user';
 import { generateRawToken, hashToken } from '@/lib/magic-link';
+import { centsToDollarsString, dollarsStringToCents } from '@/lib/money';
 
 // Pay-app lifecycle actions for sub_to_gc + gc_to_owner pay applications.
 // startMonthlyPayApp opens a pay-app cycle for a project + period. For each
@@ -360,4 +362,186 @@ export async function requestRevisionSubPayApp(
   });
   revalidatePath(`/projects/${parsed.projectId}/pay-apps`);
   redirect(`/projects/${parsed.projectId}/pay-apps?${params.toString()}`);
+}
+
+// assembleOwnerPayApp: aggregate every approved sub_to_gc pay-app for the
+// given period into a fresh gc_to_owner pay_application. Each source line
+// becomes one owner pay-app line (1:1, preserving traceability via
+// sov_line_id). Rolled-up sub pay-apps transition to
+// included_in_owner_pay_app. All in one transaction.
+//
+// MVP scope: rolls only approved sub work. GC-internal billing
+// (subcontract_id IS NULL SoV lines billed by the GC for bonding,
+// permits, OH&P) is a follow-up — those lines aren't rolled in here yet.
+
+const AssembleOwnerPayAppInput = z.object({
+  projectId: z.string().uuid(),
+  periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+  periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+});
+
+export async function assembleOwnerPayApp(formData: FormData): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = AssembleOwnerPayAppInput.parse({
+    projectId: formData.get('projectId'),
+    periodStart: formData.get('periodStart'),
+    periodEnd: formData.get('periodEnd'),
+  });
+
+  if (parsed.periodStart > parsed.periodEnd) {
+    throw new Error('Period start must be on or before period end');
+  }
+
+  const [project] = await db
+    .select({ id: schema.projects.id })
+    .from(schema.projects)
+    .where(
+      and(
+        eq(schema.projects.id, parsed.projectId),
+        eq(schema.projects.tenantId, tenant.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!project) {
+    throw new Error('Project not found in current tenant or has been archived');
+  }
+
+  // Refuse if a gc_to_owner pay app already exists for this period.
+  const existing = await db
+    .select({ id: schema.payApplications.id })
+    .from(schema.payApplications)
+    .where(
+      and(
+        eq(schema.payApplications.projectId, parsed.projectId),
+        eq(schema.payApplications.tenantId, tenant.id),
+        eq(schema.payApplications.direction, 'gc_to_owner'),
+        eq(schema.payApplications.periodStart, parsed.periodStart),
+        eq(schema.payApplications.periodEnd, parsed.periodEnd),
+      ),
+    )
+    .limit(1);
+  if (existing.length > 0) {
+    throw new Error(
+      'An owner pay app already exists for this period. Cancel/delete it first or pick a different period.',
+    );
+  }
+
+  const approvedSubPayApps = await db
+    .select({
+      id: schema.payApplications.id,
+      status: schema.payApplications.status,
+    })
+    .from(schema.payApplications)
+    .where(
+      and(
+        eq(schema.payApplications.projectId, parsed.projectId),
+        eq(schema.payApplications.tenantId, tenant.id),
+        eq(schema.payApplications.direction, 'sub_to_gc'),
+        eq(schema.payApplications.periodStart, parsed.periodStart),
+        eq(schema.payApplications.periodEnd, parsed.periodEnd),
+        eq(schema.payApplications.status, 'approved'),
+      ),
+    );
+
+  if (approvedSubPayApps.length === 0) {
+    throw new Error(
+      'No approved sub pay apps for this period. Approve at least one sub submission before assembling.',
+    );
+  }
+
+  const subPayAppIds = approvedSubPayApps.map((p) => p.id);
+  const subLines = await db
+    .select({
+      sourcePayAppId: schema.payApplicationLines.payApplicationId,
+      sovLineId: schema.payApplicationLines.sovLineId,
+      previouslyBilledAmount: schema.payApplicationLines.previouslyBilledAmount,
+      gcAdjustedPercent: schema.payApplicationLines.gcAdjustedPercent,
+      thisPeriodAmount: schema.payApplicationLines.thisPeriodAmount,
+      storedMaterialsAmount: schema.payApplicationLines.storedMaterialsAmount,
+      retentionAmount: schema.payApplicationLines.retentionAmount,
+    })
+    .from(schema.payApplicationLines)
+    .where(inArray(schema.payApplicationLines.payApplicationId, subPayAppIds));
+
+  let totalBilledCents = 0;
+  let totalRetentionCents = 0;
+  for (const l of subLines) {
+    totalBilledCents += dollarsStringToCents(l.thisPeriodAmount);
+    totalRetentionCents += dollarsStringToCents(l.retentionAmount);
+  }
+
+  // Reducer guard for each source pay app.
+  for (const p of approvedSubPayApps) {
+    const t = rollIntoOwnerPayApp(
+      p.status as Parameters<typeof rollIntoOwnerPayApp>[0],
+      'pending-id',
+    );
+    if (!t.ok) throw new Error(t.error);
+  }
+
+  await db.transaction(async (tx) => {
+    const [ownerPayApp] = await tx
+      .insert(schema.payApplications)
+      .values({
+        tenantId: tenant.id,
+        projectId: parsed.projectId,
+        direction: 'gc_to_owner',
+        periodStart: parsed.periodStart,
+        periodEnd: parsed.periodEnd,
+        status: 'generated',
+        totalBilled: centsToDollarsString(totalBilledCents),
+        totalRetention: centsToDollarsString(totalRetentionCents),
+      })
+      .returning({ id: schema.payApplications.id });
+    if (!ownerPayApp) throw new Error('Owner pay-app insert returned no row');
+
+    if (subLines.length > 0) {
+      await tx.insert(schema.payApplicationLines).values(
+        subLines.map((l) => ({
+          payApplicationId: ownerPayApp.id,
+          sovLineId: l.sovLineId,
+          previouslyBilledAmount: l.previouslyBilledAmount,
+          subReportedPercent: l.gcAdjustedPercent,
+          gcAdjustedPercent: l.gcAdjustedPercent,
+          thisPeriodAmount: l.thisPeriodAmount,
+          storedMaterialsAmount: l.storedMaterialsAmount,
+          retentionAmount: l.retentionAmount,
+        })),
+      );
+    }
+
+    for (const sp of approvedSubPayApps) {
+      await tx
+        .update(schema.payApplications)
+        .set({ status: 'included_in_owner_pay_app' })
+        .where(eq(schema.payApplications.id, sp.id));
+
+      await tx.insert(schema.approvalEvents).values({
+        tenantId: tenant.id,
+        entityType: 'pay_application',
+        entityId: sp.id,
+        fromStatus: 'approved',
+        toStatus: 'included_in_owner_pay_app',
+        actorType: 'system',
+        actorUserId: user.id,
+        comment: `Rolled into owner pay app ${ownerPayApp.id}`,
+      });
+    }
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'pay_application',
+      entityId: ownerPayApp.id,
+      fromStatus: null,
+      toStatus: 'generated',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: `Assembled from ${approvedSubPayApps.length} approved sub pay app(s)`,
+    });
+  });
+
+  revalidatePath(`/projects/${parsed.projectId}/pay-apps`);
+  redirect(`/projects/${parsed.projectId}/pay-apps`);
 }

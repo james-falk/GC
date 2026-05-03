@@ -65,3 +65,22 @@ export function pmRequestRevisionSubPayApp(
     nextState: { kind: 'needs_revision', comment, at: now },
   };
 }
+
+// System rolls an approved sub pay-app into a freshly-assembled owner
+// pay-app for the same period. Legal from `approved` only.
+export function rollIntoOwnerPayApp(
+  currentKind: SubPayAppKind,
+  ownerPayAppId: string,
+  now: Date = new Date(),
+): TransitionResult<SubPayAppState> {
+  if (currentKind !== 'approved') {
+    return {
+      ok: false,
+      error: `cannot roll into owner pay app from state '${currentKind}' — must be 'approved'`,
+    };
+  }
+  return {
+    ok: true,
+    nextState: { kind: 'included_in_owner_pay_app', ownerPayAppId, at: now },
+  };
+}

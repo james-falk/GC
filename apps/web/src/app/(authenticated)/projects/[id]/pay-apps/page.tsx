@@ -3,7 +3,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { resolveBaseUrl } from '@/lib/magic-link';
-import { startMonthlyPayApp } from './actions';
+import { assembleOwnerPayApp, startMonthlyPayApp } from './actions';
 
 // Pay Apps tab — real list scoped to this project. See
 // gc-wireframes-brief.md § Screen 7 (review) and § Screen 9 (owner pay app).
@@ -170,53 +170,104 @@ export default async function ProjectPayAppsPage({
         </div>
       )}
 
-      {/* Start a new monthly cycle */}
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-        <h3 className="text-sm font-semibold text-slate-900">
-          Start monthly pay-app cycle
-        </h3>
-        <p className="mt-1 text-xs text-slate-600">
-          Creates a sub pay-app + magic-link for every active subcontract on
-          this project for the period below.
-        </p>
-        <form
-          action={startMonthlyPayApp}
-          className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-12"
-        >
-          <input type="hidden" name="projectId" value={projectId} />
-          <div className="sm:col-span-4">
-            <label htmlFor="periodStart" className="block text-xs font-medium text-slate-700">
-              Period start
-            </label>
-            <input
-              id="periodStart"
-              name="periodStart"
-              type="date"
-              required
-              className={inputClass + ' mt-1'}
-            />
-          </div>
-          <div className="sm:col-span-4">
-            <label htmlFor="periodEnd" className="block text-xs font-medium text-slate-700">
-              Period end
-            </label>
-            <input
-              id="periodEnd"
-              name="periodEnd"
-              type="date"
-              required
-              className={inputClass + ' mt-1'}
-            />
-          </div>
-          <div className="flex items-end sm:col-span-4">
-            <button
-              type="submit"
-              className="w-full rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-800"
-            >
-              Start cycle
-            </button>
-          </div>
-        </form>
+      {/* Start a new monthly cycle + Assemble owner pay app */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+          <h3 className="text-sm font-semibold text-slate-900">
+            Start monthly pay-app cycle
+          </h3>
+          <p className="mt-1 text-xs text-slate-600">
+            Creates a sub pay-app + magic-link for every active subcontract on
+            this project for the period below.
+          </p>
+          <form
+            action={startMonthlyPayApp}
+            className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-12"
+          >
+            <input type="hidden" name="projectId" value={projectId} />
+            <div className="sm:col-span-5">
+              <label htmlFor="periodStart" className="block text-xs font-medium text-slate-700">
+                Period start
+              </label>
+              <input
+                id="periodStart"
+                name="periodStart"
+                type="date"
+                required
+                className={inputClass + ' mt-1'}
+              />
+            </div>
+            <div className="sm:col-span-5">
+              <label htmlFor="periodEnd" className="block text-xs font-medium text-slate-700">
+                Period end
+              </label>
+              <input
+                id="periodEnd"
+                name="periodEnd"
+                type="date"
+                required
+                className={inputClass + ' mt-1'}
+              />
+            </div>
+            <div className="flex items-end sm:col-span-2">
+              <button
+                type="submit"
+                className="w-full rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-800"
+              >
+                Start
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+          <h3 className="text-sm font-semibold text-slate-900">
+            Assemble owner pay app
+          </h3>
+          <p className="mt-1 text-xs text-slate-600">
+            Rolls every approved sub pay-app for the period into a single
+            gc_to_owner pay app. Generates the AIA G702 + G703 PDFs from the
+            real numbers.
+          </p>
+          <form
+            action={assembleOwnerPayApp}
+            className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-12"
+          >
+            <input type="hidden" name="projectId" value={projectId} />
+            <div className="sm:col-span-5">
+              <label htmlFor="assemblePeriodStart" className="block text-xs font-medium text-slate-700">
+                Period start
+              </label>
+              <input
+                id="assemblePeriodStart"
+                name="periodStart"
+                type="date"
+                required
+                className={inputClass + ' mt-1'}
+              />
+            </div>
+            <div className="sm:col-span-5">
+              <label htmlFor="assemblePeriodEnd" className="block text-xs font-medium text-slate-700">
+                Period end
+              </label>
+              <input
+                id="assemblePeriodEnd"
+                name="periodEnd"
+                type="date"
+                required
+                className={inputClass + ' mt-1'}
+              />
+            </div>
+            <div className="flex items-end sm:col-span-2">
+              <button
+                type="submit"
+                className="w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+              >
+                Assemble
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
 
       {/* List */}
