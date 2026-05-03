@@ -7,3 +7,4 @@ export * from './change-order';
 export * from './sworn-statement';
 export * from './change-order-reducer';
 export * from './sub-pay-app-reducer';
+export * from './sworn-statement-reducer';

@@ -1,19 +1,27 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { MOCK_ALERTS, SEVERITY_STYLES } from '../_data/mock-alerts';
+import { getCurrentTenant } from '@/lib/tenant';
+import { getDriftAlertsForTenant, SEVERITY_STYLES } from '@/lib/drift';
 
 // Drift detail. See gc-wireframes-brief.md § Screen 12.
 // Three sections: what's wrong (plain English), where the data is (links to
 // offending entities), how to fix (action buttons). Right column shows the
 // detection timeline.
+//
+// Re-runs the invariants on every visit and looks up the alert by id.
+// (No persistent drift_alerts table — alerts are computed live.)
 
 type PageProps = {
   params: Promise<{ id: string }>;
 };
 
 export default async function DriftDetailPage({ params }: PageProps) {
-  const { id } = await params;
-  const alert = MOCK_ALERTS.find((a) => a.id === id);
+  const { id: rawId } = await params;
+  // Alert ids are URL-encoded by Next.js; decode for the comparison.
+  const id = decodeURIComponent(rawId);
+  const tenant = await getCurrentTenant();
+  const alerts = await getDriftAlertsForTenant(tenant.id);
+  const alert = alerts.find((a) => a.id === id);
   if (!alert) notFound();
 
   const sev = SEVERITY_STYLES[alert.severity];

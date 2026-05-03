@@ -1,39 +1,48 @@
 import Link from 'next/link';
 import { OrganizationSwitcher, UserButton } from '@clerk/nextjs';
-import { MOCK_ALERTS } from './drift/_data/mock-alerts';
+import { getCurrentTenant } from '@/lib/tenant';
+import { getDriftAlertsForTenant } from '@/lib/drift';
 
 // App shell — top bar + left sidebar nav. See gc-wireframes-brief.md § Screen 1.
 // Most nav items are placeholders until their feature lands.
 
-const driftHighCount = MOCK_ALERTS.filter((a) => a.severity === 'high').length;
-
-const NAV: Array<{
+type NavItem = {
   label: string;
   href: string;
   enabled: boolean;
   badge?: number;
-}> = [
-  { label: 'Dashboard', href: '/dashboard', enabled: false },
-  { label: 'Projects', href: '/projects', enabled: true },
-  { label: 'Organizations', href: '/organizations', enabled: true },
-  { label: 'Subcontractors', href: '/subcontractors', enabled: true },
-  { label: 'Pay Apps', href: '/pay-apps', enabled: false },
-  { label: 'Change Orders', href: '/change-orders', enabled: false },
-  { label: 'Documents', href: '/documents', enabled: false },
-  {
-    label: 'Drift Alerts',
-    href: '/drift',
-    enabled: true,
-    badge: driftHighCount,
-  },
-  { label: 'Settings', href: '/settings', enabled: false },
-];
+};
 
-export default function AuthenticatedLayout({
+export default async function AuthenticatedLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // The layout itself queries the tenant + counts high-severity drift
+  // alerts so the sidebar badge reflects real state. This runs on every
+  // authenticated page navigation; if it ever becomes a perf concern,
+  // cache or move to a client poll.
+  const tenant = await getCurrentTenant();
+  const alerts = await getDriftAlertsForTenant(tenant.id);
+  const driftHighCount = alerts.filter((a) => a.severity === 'high').length;
+
+  const nav: NavItem[] = [
+    { label: 'Dashboard', href: '/dashboard', enabled: false },
+    { label: 'Projects', href: '/projects', enabled: true },
+    { label: 'Organizations', href: '/organizations', enabled: true },
+    { label: 'Subcontractors', href: '/subcontractors', enabled: true },
+    { label: 'Pay Apps', href: '/pay-apps', enabled: false },
+    { label: 'Change Orders', href: '/change-orders', enabled: false },
+    { label: 'Documents', href: '/documents', enabled: false },
+    {
+      label: 'Drift Alerts',
+      href: '/drift',
+      enabled: true,
+      badge: driftHighCount,
+    },
+    { label: 'Settings', href: '/settings', enabled: false },
+  ];
+
   return (
     <div className="flex min-h-screen flex-col bg-white text-slate-900">
       <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
@@ -52,7 +61,7 @@ export default function AuthenticatedLayout({
       <div className="flex flex-1">
         <aside className="w-60 shrink-0 border-r border-slate-200 bg-slate-50 p-3">
           <nav className="flex flex-col gap-0.5">
-            {NAV.map((item) =>
+            {nav.map((item) =>
               item.enabled ? (
                 <Link
                   key={item.href}

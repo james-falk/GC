@@ -1,16 +1,17 @@
 import Link from 'next/link';
-import { MOCK_ALERTS, SEVERITY_STYLES } from './_data/mock-alerts';
+import { getCurrentTenant } from '@/lib/tenant';
+import { getDriftAlertsForTenant, SEVERITY_STYLES } from '@/lib/drift';
 
 // Drift Dashboard. See gc-wireframes-brief.md § Screen 2 (Drift Alerts panel)
 // and § Screen 12 (detail view, behind each row).
 //
-// Phase A scope: clickable mock with three example alerts shaped on the seed
-// fixture, exercising invariants 1, 3, and 4 from gc-data-model.md. Real
-// drift detection lands when CO propagation is wired and the invariants
-// can run against live data.
+// Real drift detection: runs every invariant in @constructor/domain against
+// the tenant's live data on every page load. Empty list = system is
+// reconciled; populated list = something needs human attention.
 
-export default function DriftDashboardPage() {
-  const alerts = MOCK_ALERTS;
+export default async function DriftDashboardPage() {
+  const tenant = await getCurrentTenant();
+  const alerts = await getDriftAlertsForTenant(tenant.id);
   const highCount = alerts.filter((a) => a.severity === 'high').length;
 
   return (
