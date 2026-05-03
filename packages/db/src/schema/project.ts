@@ -20,6 +20,10 @@ export const projects = pgTable('projects', {
   startDate: date('start_date'),
   targetCompletionDate: date('target_completion_date'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // Soft delete marker. NULL = active; non-NULL = archived. Every project
+  // query MUST filter `WHERE deleted_at IS NULL` unless an archived view
+  // is explicitly requested.
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
 });
 
 export type Project = typeof projects.$inferSelect;

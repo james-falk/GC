@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 
@@ -36,15 +36,22 @@ export async function addSovLine(formData: FormData) {
     subcontractId: formData.get('subcontractId'),
   });
 
-  // Confirm the project belongs to this tenant before inserting against it.
+  // Confirm the project belongs to this tenant AND isn't archived before
+  // inserting against it.
   const [project] = await db
     .select({ id: schema.projects.id })
     .from(schema.projects)
-    .where(and(eq(schema.projects.id, parsed.projectId), eq(schema.projects.tenantId, tenant.id)))
+    .where(
+      and(
+        eq(schema.projects.id, parsed.projectId),
+        eq(schema.projects.tenantId, tenant.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
     .limit(1);
 
   if (!project) {
-    throw new Error('Project not found in current tenant');
+    throw new Error('Project not found in current tenant or has been archived');
   }
 
   // If a subcontract was picked, verify it belongs to this project + tenant.

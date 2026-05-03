@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 
@@ -46,11 +46,12 @@ export async function createSubcontract(formData: FormData) {
       and(
         eq(schema.projects.id, parsed.projectId),
         eq(schema.projects.tenantId, tenant.id),
+        isNull(schema.projects.deletedAt),
       ),
     )
     .limit(1);
   if (!project) {
-    throw new Error('Project not found in current tenant');
+    throw new Error('Project not found in current tenant or has been archived');
   }
 
   const [sub] = await db

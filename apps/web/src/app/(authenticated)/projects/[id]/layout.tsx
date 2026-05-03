@@ -3,11 +3,15 @@ import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { ProjectTabs } from './_components/project-tabs';
+import { archiveProject, restoreProject } from '../actions';
 
 // Project detail layout — wraps every tab (SoV, Subs, Pay Apps, COs, Documents)
-// with a shared header (project metadata) and tab nav. Each tab is its own
-// route segment so URLs are bookmarkable and the active tab is reflected in
-// the URL bar. See gc-wireframes-brief.md § Screen 3.
+// with a shared header (project metadata) and tab nav. See
+// gc-wireframes-brief.md § Screen 3.
+//
+// Soft delete: archived projects (deleted_at IS NOT NULL) still resolve so
+// they can be inspected and restored, but render with an Archived banner
+// and a Restore action instead of Archive.
 
 type LayoutProps = {
   children: React.ReactNode;
@@ -26,17 +30,56 @@ export default async function ProjectLayout({ children, params }: LayoutProps) {
 
   if (!project) notFound();
 
+  const isArchived = project.deletedAt !== null;
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
+      {isArchived && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <span className="font-medium">Archived</span> on{' '}
+              {project.deletedAt
+                ? new Date(project.deletedAt).toLocaleDateString()
+                : ''}
+              . Read-only — restore to make changes.
+            </div>
+            <form action={restoreProject}>
+              <input type="hidden" name="projectId" value={project.id} />
+              <button
+                type="submit"
+                className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-800 transition hover:bg-amber-100"
+              >
+                Restore project
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <header className="border-b border-slate-200 pb-5">
         <div className="text-xs uppercase tracking-wide text-slate-500">
           Project #{project.projectNumber}
         </div>
-        <div className="mt-1 flex items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-            {project.status}
-          </span>
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+              {project.status}
+            </span>
+          </div>
+          {!isArchived && (
+            <form action={archiveProject}>
+              <input type="hidden" name="projectId" value={project.id} />
+              <button
+                type="submit"
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                title="Soft-delete: project is hidden from the list but recoverable"
+              >
+                Archive
+              </button>
+            </form>
+          )}
         </div>
         <dl className="mt-3 grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-4">
           <div>

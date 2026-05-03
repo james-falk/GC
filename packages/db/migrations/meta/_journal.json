@@ -29,6 +29,13 @@
       "when": 1777520242756,
       "tag": "0003_nappy_harrier",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777775555296,
+      "tag": "0004_nebulous_power_pack",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   approveChangeOrderDirect,
   sendDraftToOwner,
@@ -62,7 +62,7 @@ export async function saveCoDraft(input: SaveCoDraftPayload): Promise<void> {
   const user = await ensureCurrentUser();
   const parsed = SaveCoDraftInput.parse(input);
 
-  // Confirm the project belongs to this tenant.
+  // Confirm the project belongs to this tenant and isn't archived.
   const [project] = await db
     .select({ id: schema.projects.id })
     .from(schema.projects)
@@ -70,10 +70,11 @@ export async function saveCoDraft(input: SaveCoDraftPayload): Promise<void> {
       and(
         eq(schema.projects.id, parsed.projectId),
         eq(schema.projects.tenantId, tenant.id),
+        isNull(schema.projects.deletedAt),
       ),
     )
     .limit(1);
-  if (!project) throw new Error('Project not found in current tenant');
+  if (!project) throw new Error('Project not found in current tenant or has been archived');
 
   // Confirm the affected subcontract belongs to this project + tenant.
   if (parsed.affectedSubcontractId) {
@@ -176,7 +177,8 @@ export async function approveChangeOrder(formData: FormData): Promise<void> {
     projectId: formData.get('projectId'),
   });
 
-  // Read the CO inside the tenant scope.
+  // Read the CO inside the tenant scope; require the project to be active
+  // (not archived) — write actions on archived projects are blocked.
   const [co] = await db
     .select({
       id: schema.changeOrders.id,
@@ -186,6 +188,13 @@ export async function approveChangeOrder(formData: FormData): Promise<void> {
       affectedSubcontractId: schema.changeOrders.affectedSubcontractId,
     })
     .from(schema.changeOrders)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.changeOrders.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
     .where(
       and(
         eq(schema.changeOrders.id, parsed.changeOrderId),
@@ -194,7 +203,7 @@ export async function approveChangeOrder(formData: FormData): Promise<void> {
       ),
     )
     .limit(1);
-  if (!co) throw new Error('Change order not found');
+  if (!co) throw new Error('Change order not found or project archived');
 
   // The state machine guards the transition. We map the DB enum value
   // into the domain state shape; only the discriminator matters here.
@@ -294,13 +303,20 @@ export async function sendApprovalLink(formData: FormData): Promise<void> {
     recipientEmail: formData.get('recipientEmail'),
   });
 
-  // Read the CO inside the tenant scope and confirm it's eligible.
+  // Read the CO inside the tenant scope; require the project to be active.
   const [co] = await db
     .select({
       id: schema.changeOrders.id,
       status: schema.changeOrders.status,
     })
     .from(schema.changeOrders)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.changeOrders.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
     .where(
       and(
         eq(schema.changeOrders.id, parsed.changeOrderId),
@@ -309,7 +325,7 @@ export async function sendApprovalLink(formData: FormData): Promise<void> {
       ),
     )
     .limit(1);
-  if (!co) throw new Error('Change order not found');
+  if (!co) throw new Error('Change order not found or project archived');
 
   // Reducer guards the transition; we only insert if the move is legal.
   // A magicLinkId placeholder is fine here — the reducer doesn't read it,
