@@ -4,3 +4,4 @@
 
 export * from './state-machines/index';
 export * from './invariants/index';
+export * from './propagation/co-propagation';

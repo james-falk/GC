@@ -6,14 +6,17 @@ import { revalidatePath } from 'next/cache';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   approveChangeOrderDirect,
+  buildPropagationOps,
   principalApproveCo,
   principalRejectCo,
   sendDraftToOwner,
   submitCoToPrincipal,
+  type PropagationOp,
 } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
 import { ensureCurrentUser } from '@/lib/user';
+import { applyPropagationOp } from '@/lib/co-propagation-tx';
 import { generateRawToken, hashToken } from '@/lib/magic-link';
 
 // Server actions for the ChangeOrder workflow.
@@ -230,37 +233,21 @@ export async function approveChangeOrder(formData: FormData): Promise<void> {
     throw new Error('Change order has no line items — cannot approve');
   }
 
+  // Build the propagation op list in @constructor/domain (pure), then
+  // execute each op inside a single transaction here.
+  const propagationOps = buildPropagationOps({
+    changeOrderId: co.id,
+    totalAmount: co.totalAmount,
+    affectedSubcontractId: co.affectedSubcontractId,
+    lines,
+  });
+
   await db.transaction(async (tx) => {
-    // 1. Flip the CO to approved.
-    await tx
-      .update(schema.changeOrders)
-      .set({
-        status: 'approved',
-        approvedAt: new Date(),
-      })
-      .where(eq(schema.changeOrders.id, co.id));
-
-    // 2. Increment the affected subcontract's current_amount, if any.
-    if (co.affectedSubcontractId) {
-      await tx
-        .update(schema.subcontracts)
-        .set({
-          currentAmount: sql`${schema.subcontracts.currentAmount} + ${co.totalAmount}`,
-        })
-        .where(eq(schema.subcontracts.id, co.affectedSubcontractId));
+    for (const op of propagationOps) {
+      await applyPropagationOp(tx, op);
     }
-
-    // 3. Increment each affected SoV line by its delta.
-    for (const line of lines) {
-      await tx
-        .update(schema.sovLines)
-        .set({
-          currentAmount: sql`${schema.sovLines.currentAmount} + ${line.deltaAmount}`,
-        })
-        .where(eq(schema.sovLines.id, line.sovLineId));
-    }
-
-    // 4. Audit row.
+    // Audit row — actor context lives at the call site (PM here vs.
+    // external_invitee in the magic-link path).
     await tx.insert(schema.approvalEvents).values({
       tenantId: tenant.id,
       entityType: 'change_order',

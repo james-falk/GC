@@ -3,14 +3,16 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   architectApproveCo,
   architectRejectCo,
+  buildPropagationOps,
   ownerApproveChangeOrder,
   ownerRejectChangeOrder,
 } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
+import { applyPropagationOp } from '@/lib/co-propagation-tx';
 import {
   generateRawToken,
   hashToken,
@@ -100,40 +102,28 @@ export async function approveViaMagicLink(formData: FormData): Promise<void> {
     throw new Error('Change order has no line items');
   }
 
+  // Pure op list from @constructor/domain — same source of truth as the
+  // PM-direct path. The SQL adapter (applyPropagationOp) lives in
+  // apps/web/src/lib/co-propagation-tx.ts.
+  const propagationOps = buildPropagationOps({
+    changeOrderId: co.id,
+    totalAmount: co.totalAmount,
+    affectedSubcontractId: co.affectedSubcontractId,
+    lines,
+  });
+
   await db.transaction(async (tx) => {
-    // 1. Flip the CO to approved.
-    await tx
-      .update(schema.changeOrders)
-      .set({ status: 'approved', approvedAt: new Date() })
-      .where(eq(schema.changeOrders.id, co.id));
-
-    // 2. Increment the affected subcontract.
-    if (co.affectedSubcontractId) {
-      await tx
-        .update(schema.subcontracts)
-        .set({
-          currentAmount: sql`${schema.subcontracts.currentAmount} + ${co.totalAmount}`,
-        })
-        .where(eq(schema.subcontracts.id, co.affectedSubcontractId));
+    for (const op of propagationOps) {
+      await applyPropagationOp(tx, op);
     }
 
-    // 3. Increment every affected SoV line.
-    for (const line of lines) {
-      await tx
-        .update(schema.sovLines)
-        .set({
-          currentAmount: sql`${schema.sovLines.currentAmount} + ${line.deltaAmount}`,
-        })
-        .where(eq(schema.sovLines.id, line.sovLineId));
-    }
-
-    // 4. Mark the magic-link consumed.
+    // Mark the magic-link consumed (consumer-path only).
     await tx
       .update(schema.magicLinks)
       .set({ consumedAt: new Date() })
       .where(eq(schema.magicLinks.id, link.id));
 
-    // 5. Audit row.
+    // Audit row — actor is the external invitee from the link.
     await tx.insert(schema.approvalEvents).values({
       tenantId: link.tenantId,
       entityType: 'change_order',
