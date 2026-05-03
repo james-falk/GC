@@ -64,10 +64,10 @@ export function ownerRejectChangeOrder(
   return { ok: true, nextState: { kind: 'owner_rejected', comment, at: now } };
 }
 
-// PM clicks "Send approval link" on a draft CO — for the MVP magic-link
-// demo we skip the Principal + Architect intermediate steps and route the
-// link straight to the owner. When the full chain lands, this transitions
-// to pending_principal first; for now it goes straight to pending_owner.
+// PM clicks "Send approval link" on a draft CO — legacy MVP shortcut that
+// skips Principal + Architect intermediate steps and routes the link
+// straight to the owner. Kept for backwards-compat with existing draft
+// COs; new flow uses the full chain via submitCoToPrincipal.
 export function sendDraftToOwner(
   state: ChangeOrderState,
   magicLinkId: string,
@@ -83,4 +83,113 @@ export function sendDraftToOwner(
     ok: true,
     nextState: { kind: 'pending_owner', magicLinkId, at: now },
   };
+}
+
+// Full chain transitions — Principal in-app + Architect magic-link +
+// Owner magic-link. Each takes the current kind only (the reducer
+// inspects only kind to decide legality; payload-bearing variants are
+// constructed in the next state).
+
+type ChangeOrderKind = ChangeOrderState['kind'];
+
+export function submitCoToPrincipal(
+  currentKind: ChangeOrderKind,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (currentKind !== 'draft') {
+    return {
+      ok: false,
+      error: `cannot submit to principal from state '${currentKind}' — must be 'draft'`,
+    };
+  }
+  return { ok: true, nextState: { kind: 'pending_principal', at: now } };
+}
+
+export function principalApproveCo(
+  currentKind: ChangeOrderKind,
+  magicLinkId: string,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (currentKind !== 'pending_principal') {
+    return {
+      ok: false,
+      error: `cannot principal-approve from state '${currentKind}' — must be 'pending_principal'`,
+    };
+  }
+  return {
+    ok: true,
+    nextState: { kind: 'pending_architect', magicLinkId, at: now },
+  };
+}
+
+export function principalRejectCo(
+  currentKind: ChangeOrderKind,
+  comment: string,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (currentKind !== 'pending_principal') {
+    return {
+      ok: false,
+      error: `cannot principal-reject from state '${currentKind}' — must be 'pending_principal'`,
+    };
+  }
+  if (!comment.trim()) {
+    return { ok: false, error: 'rejection comment is required' };
+  }
+  // Principal rejection bounces back to draft per the state-machine spec
+  // (PM revises + re-submits). The comment is captured in the audit log,
+  // not the state itself, since draft has no comment field.
+  return { ok: true, nextState: { kind: 'draft' } };
+}
+
+export function architectApproveCo(
+  currentKind: ChangeOrderKind,
+  magicLinkId: string,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (currentKind !== 'pending_architect') {
+    return {
+      ok: false,
+      error: `cannot architect-approve from state '${currentKind}' — must be 'pending_architect'`,
+    };
+  }
+  return {
+    ok: true,
+    nextState: { kind: 'pending_owner', magicLinkId, at: now },
+  };
+}
+
+export function architectRejectCo(
+  currentKind: ChangeOrderKind,
+  comment: string,
+  now: Date = new Date(),
+): TransitionResult<ChangeOrderState> {
+  if (currentKind !== 'pending_architect') {
+    return {
+      ok: false,
+      error: `cannot architect-reject from state '${currentKind}' — must be 'pending_architect'`,
+    };
+  }
+  if (!comment.trim()) {
+    return { ok: false, error: 'rejection comment is required' };
+  }
+  return {
+    ok: true,
+    nextState: { kind: 'architect_rejected', comment, at: now },
+  };
+}
+
+export function pmReviseAfterRejection(
+  currentKind: ChangeOrderKind,
+): TransitionResult<ChangeOrderState> {
+  if (
+    currentKind !== 'architect_rejected' &&
+    currentKind !== 'owner_rejected'
+  ) {
+    return {
+      ok: false,
+      error: `cannot revise from state '${currentKind}' — must be a rejection state`,
+    };
+  }
+  return { ok: true, nextState: { kind: 'draft' } };
 }

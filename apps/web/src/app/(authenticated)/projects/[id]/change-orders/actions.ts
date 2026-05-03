@@ -6,7 +6,10 @@ import { revalidatePath } from 'next/cache';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   approveChangeOrderDirect,
+  principalApproveCo,
+  principalRejectCo,
   sendDraftToOwner,
+  submitCoToPrincipal,
 } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
@@ -367,4 +370,243 @@ export async function sendApprovalLink(formData: FormData): Promise<void> {
   redirect(
     `/projects/${parsed.projectId}/change-orders?token=${rawToken}&coId=${co.id}`,
   );
+}
+
+// Full chain: PM submits draft to Principal (in-app review).
+const SubmitToPrincipalInput = z.object({
+  changeOrderId: z.string().uuid(),
+  projectId: z.string().uuid(),
+});
+
+export async function submitCoToPrincipalAction(
+  formData: FormData,
+): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = SubmitToPrincipalInput.parse({
+    changeOrderId: formData.get('changeOrderId'),
+    projectId: formData.get('projectId'),
+  });
+
+  const [co] = await db
+    .select({
+      id: schema.changeOrders.id,
+      status: schema.changeOrders.status,
+    })
+    .from(schema.changeOrders)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.changeOrders.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.changeOrders.id, parsed.changeOrderId),
+        eq(schema.changeOrders.projectId, parsed.projectId),
+        eq(schema.changeOrders.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!co) throw new Error('Change order not found or project archived');
+
+  const transition = submitCoToPrincipal(
+    co.status as Parameters<typeof submitCoToPrincipal>[0],
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.changeOrders)
+      .set({ status: 'pending_principal' })
+      .where(eq(schema.changeOrders.id, co.id));
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'change_order',
+      entityId: co.id,
+      fromStatus: 'draft',
+      toStatus: 'pending_principal',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: 'PM submitted to Principal',
+    });
+  });
+
+  revalidatePath(`/projects/${parsed.projectId}/change-orders`);
+  redirect(`/projects/${parsed.projectId}/change-orders`);
+}
+
+// Principal in-app approve: transitions to pending_architect AND
+// generates the architect magic-link in one transaction. Recipient email
+// comes from project.architect_id → organizations.contact_email.
+const PrincipalApproveInput = z.object({
+  changeOrderId: z.string().uuid(),
+  projectId: z.string().uuid(),
+});
+
+export async function principalApproveCoAction(
+  formData: FormData,
+): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = PrincipalApproveInput.parse({
+    changeOrderId: formData.get('changeOrderId'),
+    projectId: formData.get('projectId'),
+  });
+
+  // CO + project (so we can resolve architect email).
+  const [co] = await db
+    .select({
+      id: schema.changeOrders.id,
+      status: schema.changeOrders.status,
+      projectArchitectId: schema.projects.architectId,
+    })
+    .from(schema.changeOrders)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.changeOrders.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.changeOrders.id, parsed.changeOrderId),
+        eq(schema.changeOrders.projectId, parsed.projectId),
+        eq(schema.changeOrders.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!co) throw new Error('Change order not found or project archived');
+
+  if (!co.projectArchitectId) {
+    throw new Error(
+      'Project has no architect organization attached — set one before routing for approval.',
+    );
+  }
+
+  const [architect] = await db
+    .select({ email: schema.organizations.contactEmail })
+    .from(schema.organizations)
+    .where(eq(schema.organizations.id, co.projectArchitectId))
+    .limit(1);
+  if (!architect || !architect.email) {
+    throw new Error('Architect organization has no contact email — add one first.');
+  }
+  const recipientEmail = architect.email;
+
+  const transition = principalApproveCo(
+    co.status as Parameters<typeof principalApproveCo>[0],
+    'pending-insert',
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  const rawToken = generateRawToken();
+  const tokenHash = hashToken(rawToken);
+  const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_HOURS * 60 * 60 * 1000);
+
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.magicLinks).values({
+      tenantId: tenant.id,
+      targetEntityType: 'change_order',
+      targetEntityId: co.id,
+      recipientEmail,
+      recipientRole: 'architect',
+      tokenHash,
+      action: 'approve_or_reject',
+      expiresAt,
+    });
+
+    await tx
+      .update(schema.changeOrders)
+      .set({ status: 'pending_architect' })
+      .where(eq(schema.changeOrders.id, co.id));
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'change_order',
+      entityId: co.id,
+      fromStatus: 'pending_principal',
+      toStatus: 'pending_architect',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: 'Principal approved; magic-link sent to architect',
+    });
+  });
+
+  // Carry the raw token back so the GC can copy it (until Resend lands).
+  const params = new URLSearchParams({ token: rawToken, coId: co.id });
+  revalidatePath(`/projects/${parsed.projectId}/change-orders`);
+  redirect(`/projects/${parsed.projectId}/change-orders?${params.toString()}`);
+}
+
+// Principal in-app reject: bounces back to draft, captures comment in audit.
+const PrincipalRejectInput = z.object({
+  changeOrderId: z.string().uuid(),
+  projectId: z.string().uuid(),
+  comment: z.string().trim().min(1, 'comment required').max(2000),
+});
+
+export async function principalRejectCoAction(
+  formData: FormData,
+): Promise<void> {
+  const tenant = await getCurrentTenant();
+  const user = await ensureCurrentUser();
+  const parsed = PrincipalRejectInput.parse({
+    changeOrderId: formData.get('changeOrderId'),
+    projectId: formData.get('projectId'),
+    comment: formData.get('comment'),
+  });
+
+  const [co] = await db
+    .select({
+      id: schema.changeOrders.id,
+      status: schema.changeOrders.status,
+    })
+    .from(schema.changeOrders)
+    .innerJoin(
+      schema.projects,
+      and(
+        eq(schema.changeOrders.projectId, schema.projects.id),
+        isNull(schema.projects.deletedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.changeOrders.id, parsed.changeOrderId),
+        eq(schema.changeOrders.projectId, parsed.projectId),
+        eq(schema.changeOrders.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+  if (!co) throw new Error('Change order not found or project archived');
+
+  const transition = principalRejectCo(
+    co.status as Parameters<typeof principalRejectCo>[0],
+    parsed.comment,
+  );
+  if (!transition.ok) throw new Error(transition.error);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.changeOrders)
+      .set({ status: 'draft' })
+      .where(eq(schema.changeOrders.id, co.id));
+
+    await tx.insert(schema.approvalEvents).values({
+      tenantId: tenant.id,
+      entityType: 'change_order',
+      entityId: co.id,
+      fromStatus: 'pending_principal',
+      toStatus: 'draft',
+      actorType: 'internal_user',
+      actorUserId: user.id,
+      comment: parsed.comment,
+    });
+  });
+
+  revalidatePath(`/projects/${parsed.projectId}/change-orders`);
+  redirect(`/projects/${parsed.projectId}/change-orders`);
 }

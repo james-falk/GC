@@ -2,9 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { ChangeOrderState } from './change-order';
 import {
   approveChangeOrderDirect,
+  architectApproveCo,
+  architectRejectCo,
   ownerApproveChangeOrder,
   ownerRejectChangeOrder,
+  pmReviseAfterRejection,
+  principalApproveCo,
+  principalRejectCo,
   sendDraftToOwner,
+  submitCoToPrincipal,
 } from './change-order-reducer';
 
 describe('approveChangeOrderDirect', () => {
@@ -138,5 +144,78 @@ describe('ownerRejectChangeOrder', () => {
   it('rejects from non-pending_owner', () => {
     const result = ownerRejectChangeOrder({ kind: 'draft' }, 'no', fixedNow);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('full CO chain transitions', () => {
+  const fixedNow = new Date('2026-05-01T12:00:00.000Z');
+
+  it('submitCoToPrincipal: draft → pending_principal', () => {
+    expect(submitCoToPrincipal('draft', fixedNow)).toEqual({
+      ok: true,
+      nextState: { kind: 'pending_principal', at: fixedNow },
+    });
+  });
+
+  it('submitCoToPrincipal rejects from non-draft', () => {
+    expect(submitCoToPrincipal('approved', fixedNow).ok).toBe(false);
+  });
+
+  it('principalApproveCo: pending_principal → pending_architect with magicLinkId', () => {
+    expect(principalApproveCo('pending_principal', 'ml_arch', fixedNow)).toEqual({
+      ok: true,
+      nextState: { kind: 'pending_architect', magicLinkId: 'ml_arch', at: fixedNow },
+    });
+  });
+
+  it('principalApproveCo rejects from non-pending_principal', () => {
+    expect(principalApproveCo('draft', 'ml_x', fixedNow).ok).toBe(false);
+  });
+
+  it('principalRejectCo: pending_principal → draft (with comment captured externally)', () => {
+    expect(principalRejectCo('pending_principal', 'budget exceeds', fixedNow)).toEqual({
+      ok: true,
+      nextState: { kind: 'draft' },
+    });
+  });
+
+  it('principalRejectCo requires comment', () => {
+    expect(principalRejectCo('pending_principal', '   ', fixedNow).ok).toBe(false);
+  });
+
+  it('architectApproveCo: pending_architect → pending_owner', () => {
+    expect(architectApproveCo('pending_architect', 'ml_owner', fixedNow)).toEqual({
+      ok: true,
+      nextState: { kind: 'pending_owner', magicLinkId: 'ml_owner', at: fixedNow },
+    });
+  });
+
+  it('architectRejectCo: pending_architect → architect_rejected with comment', () => {
+    expect(architectRejectCo('pending_architect', 'spec issue', fixedNow)).toEqual({
+      ok: true,
+      nextState: { kind: 'architect_rejected', comment: 'spec issue', at: fixedNow },
+    });
+  });
+
+  it('architectRejectCo requires comment', () => {
+    expect(architectRejectCo('pending_architect', '', fixedNow).ok).toBe(false);
+  });
+
+  it('pmReviseAfterRejection: architect_rejected → draft', () => {
+    expect(pmReviseAfterRejection('architect_rejected')).toEqual({
+      ok: true,
+      nextState: { kind: 'draft' },
+    });
+  });
+
+  it('pmReviseAfterRejection: owner_rejected → draft', () => {
+    expect(pmReviseAfterRejection('owner_rejected')).toEqual({
+      ok: true,
+      nextState: { kind: 'draft' },
+    });
+  });
+
+  it('pmReviseAfterRejection rejects from non-rejection state', () => {
+    expect(pmReviseAfterRejection('draft').ok).toBe(false);
   });
 });

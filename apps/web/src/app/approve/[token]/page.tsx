@@ -52,7 +52,10 @@ export default async function ApprovePage({ params, searchParams }: PageProps) {
     return <ErrorCard message="This link has expired. Ask the contractor to send a new one." />;
   }
 
-  if (link.targetEntityType !== 'change_order' || link.recipientRole !== 'owner') {
+  if (
+    link.targetEntityType !== 'change_order' ||
+    (link.recipientRole !== 'owner' && link.recipientRole !== 'architect')
+  ) {
     return (
       <ErrorCard message={`This kind of approval link (${link.targetEntityType} / ${link.recipientRole}) is not yet supported.`} />
     );
