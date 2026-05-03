@@ -58,3 +58,5 @@ coverage/
 # Test outputs
 playwright-report/
 test-results/
+
+.vercel
