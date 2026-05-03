@@ -40,6 +40,7 @@ export default async function AuthenticatedLayout({
       enabled: true,
       badge: driftHighCount,
     },
+    { label: 'Exports', href: '/exports', enabled: true },
     { label: 'Settings', href: '/settings', enabled: false },
   ];
 
