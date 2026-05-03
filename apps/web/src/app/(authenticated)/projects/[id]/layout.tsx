@@ -30,6 +30,27 @@ export default async function ProjectLayout({ children, params }: LayoutProps) {
 
   if (!project) notFound();
 
+  // Resolve linked organizations for header display. Each is optional; we
+  // batch the two lookups in parallel and fall back to '—' if missing.
+  const orgIds = [project.ownerId, project.architectId].filter(
+    (i): i is string => Boolean(i),
+  );
+  const orgs =
+    orgIds.length > 0
+      ? await db
+          .select({
+            id: schema.organizations.id,
+            name: schema.organizations.name,
+          })
+          .from(schema.organizations)
+          .where(eq(schema.organizations.tenantId, tenant.id))
+      : [];
+  const orgsById = new Map(orgs.map((o) => [o.id, o.name]));
+  const ownerName = project.ownerId ? orgsById.get(project.ownerId) : null;
+  const architectName = project.architectId
+    ? orgsById.get(project.architectId)
+    : null;
+
   const isArchived = project.deletedAt !== null;
 
   return (
@@ -88,11 +109,11 @@ export default async function ProjectLayout({ children, params }: LayoutProps) {
           </div>
           <div>
             <dt className="text-slate-500">Owner</dt>
-            <dd className="text-slate-400">—</dd>
+            <dd className={ownerName ? '' : 'text-slate-400'}>{ownerName ?? '—'}</dd>
           </div>
           <div>
             <dt className="text-slate-500">Architect</dt>
-            <dd className="text-slate-400">—</dd>
+            <dd className={architectName ? '' : 'text-slate-400'}>{architectName ?? '—'}</dd>
           </div>
           <div>
             <dt className="text-slate-500">Status</dt>
