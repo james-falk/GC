@@ -5,7 +5,7 @@ import { SignInButton, SignUpButton } from '@clerk/nextjs';
 // Public landing. Signed-in users go straight to the app.
 export default async function Home() {
   const { userId } = await auth();
-  if (userId) redirect('/projects');
+  if (userId) redirect('/dashboard');
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center px-6 py-24">
@@ -18,12 +18,12 @@ export default async function Home() {
         </p>
 
         <div className="mt-10 flex items-center justify-center gap-3">
-          <SignInButton mode="modal" fallbackRedirectUrl="/projects">
+          <SignInButton mode="modal" fallbackRedirectUrl="/dashboard">
             <button className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 transition hover:bg-slate-50">
               Sign in
             </button>
           </SignInButton>
-          <SignUpButton mode="modal" fallbackRedirectUrl="/projects">
+          <SignUpButton mode="modal" fallbackRedirectUrl="/dashboard">
             <button className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-800">
               Sign up
             </button>

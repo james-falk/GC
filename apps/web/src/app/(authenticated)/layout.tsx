@@ -27,13 +27,13 @@ export default async function AuthenticatedLayout({
   const driftHighCount = alerts.filter((a) => a.severity === 'high').length;
 
   const nav: NavItem[] = [
-    { label: 'Dashboard', href: '/dashboard', enabled: false },
+    { label: 'Dashboard', href: '/dashboard', enabled: true },
     { label: 'Projects', href: '/projects', enabled: true },
     { label: 'Organizations', href: '/organizations', enabled: true },
     { label: 'Subcontractors', href: '/subcontractors', enabled: true },
-    { label: 'Pay Apps', href: '/pay-apps', enabled: false },
-    { label: 'Change Orders', href: '/change-orders', enabled: false },
-    { label: 'Documents', href: '/documents', enabled: false },
+    { label: 'Pay Apps', href: '/pay-apps', enabled: true },
+    { label: 'Change Orders', href: '/change-orders', enabled: true },
+    { label: 'Documents', href: '/documents', enabled: true },
     {
       label: 'Drift Alerts',
       href: '/drift',
@@ -42,20 +42,20 @@ export default async function AuthenticatedLayout({
     },
     { label: 'Exports', href: '/exports', enabled: true },
     { label: 'Team', href: '/team', enabled: true },
-    { label: 'Settings', href: '/settings', enabled: false },
+    { label: 'Settings', href: '/settings', enabled: true },
   ];
 
   return (
     <div className="flex min-h-screen flex-col bg-white text-slate-900">
       <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
         <div className="flex items-center gap-4">
-          <Link href="/projects" className="text-sm font-semibold tracking-tight">
+          <Link href="/dashboard" className="text-sm font-semibold tracking-tight">
             constructor
           </Link>
           <OrganizationSwitcher
             hidePersonal
-            afterCreateOrganizationUrl="/projects"
-            afterSelectOrganizationUrl="/projects"
+            afterCreateOrganizationUrl="/dashboard"
+            afterSelectOrganizationUrl="/dashboard"
           />
         </div>
         <UserButton afterSignOutUrl="/" />
