@@ -7,6 +7,13 @@ import { resolve } from 'node:path';
 //
 // Step titles double as ElevenLabs narration — write them as you'd
 // want them spoken, not as terse test descriptions.
+//
+// Data lifecycle: specs run in declared order (Playwright serial,
+// workers: 1). Spec 1 creates Lincoln Elementary; specs 2-6 reference
+// it by name. Re-running the suite creates duplicate organizations /
+// projects but the most-recently-created always wins via createdAt desc
+// sort. For a clean recording, drop the tenant's data first or use a
+// fresh Clerk org.
 
 const SAMPLE_CSV = resolve(__dirname, '../fixtures/lincoln-sov.csv');
 
