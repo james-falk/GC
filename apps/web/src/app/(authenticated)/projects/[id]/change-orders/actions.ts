@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import {
   approveChangeOrderDirect,
   buildPropagationOps,
@@ -12,7 +12,6 @@ import {
   principalRejectCo,
   sendDraftToOwner,
   submitCoToPrincipal,
-  type PropagationOp,
 } from '@constructor/domain';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';

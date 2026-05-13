@@ -2,7 +2,10 @@ import Link from 'next/link';
 import { and, asc, eq } from 'drizzle-orm';
 import { db, schema } from '@constructor/db';
 import { getCurrentTenant } from '@/lib/tenant';
+import { getProjectKpis } from '@/lib/project-kpis';
 import { addSovLine } from './actions';
+import { SovCsvUploader } from './_components/sov-csv-uploader';
+import { ProjectKpiStrip } from './_components/project-kpis';
 
 // SoV editor — display table + add-line form. Default tab on the project
 // detail page. See gc-wireframes-brief.md § Screen 4.
@@ -38,6 +41,29 @@ export default async function ProjectSovPage({ params, searchParams }: PageProps
   const { id: projectId } = await params;
   const { addChildOf } = await searchParams;
   const tenant = await getCurrentTenant();
+
+  // Project header data — only originalContractAmount is needed here for
+  // the KPI tile rollups; the layout already renders name/owner/architect.
+  const [projectMeta] = await db
+    .select({
+      originalContractAmount: schema.projects.originalContractAmount,
+    })
+    .from(schema.projects)
+    .where(
+      and(
+        eq(schema.projects.id, projectId),
+        eq(schema.projects.tenantId, tenant.id),
+      ),
+    )
+    .limit(1);
+
+  const kpis = projectMeta
+    ? await getProjectKpis({
+        projectId,
+        tenantId: tenant.id,
+        originalContractAmount: projectMeta.originalContractAmount,
+      })
+    : null;
 
   // Lines for the table — left-join to subcontracts + subcontractors so we
   // can render a "subcontractor name" chip when the line points at one.
@@ -119,16 +145,20 @@ export default async function ProjectSovPage({ params, searchParams }: PageProps
 
   return (
     <div className="space-y-6">
+      {kpis && <ProjectKpiStrip kpis={kpis} projectId={projectId} />}
+
       <div className="flex items-baseline justify-between">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Schedule of Values</h2>
           <p className="text-sm text-slate-600">
             {lines.length === 0
-              ? 'No line items yet — add the first one below.'
+              ? 'No line items yet — add the first one below or import a CSV.'
               : `${parents.length} top-level line${parents.length === 1 ? '' : 's'}, ${lines.length - parents.length} child line${lines.length - parents.length === 1 ? '' : 's'}.`}
           </p>
         </div>
       </div>
+
+      <SovCsvUploader projectId={projectId} />
 
       {lines.length > 0 && (
         <div className="overflow-hidden rounded-lg border border-slate-200">

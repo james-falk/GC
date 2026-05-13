@@ -1,0 +1,8 @@
+line_number,description,parent_line_number,contract_number,contract_amount
+1,Site work,,,40000.00
+2,General conditions,,,80000.00
+3,Masonry,,LE-2-002,0.00
+3a,Brick,3,LE-2-002,280000.00
+3b,Block,3,LE-2-002,140000.00
+4,Electrical,,LE-2-003,185000.00
+5,Mechanical,,LE-2-004,310000.00
