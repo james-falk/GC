@@ -1,19 +1,18 @@
-// Caption-only overlay. Same input shape as narrate.ts (Playwright JSON
-// results + recorded webms) but no audio — just renders each step's
-// title as a styled subtitle band at the bottom of the video, on screen
-// from when the step starts until the next step starts.
+// Caption overlay via SRT subtitles. Reads Playwright JSON results,
+// writes one SRT file per spec, then ffmpeg-burns the subtitles onto
+// the silent webm recording. No audio; just on-screen text that
+// validates the narration coverage + pacing.
 //
-// Purpose: the user previews the videos + narration content BEFORE
-// committing to ElevenLabs API spend / voice selection. If the captions
-// look right, swapping in TTS is a one-script switch (narrate.ts).
+// Why SRT instead of drawtext: drawtext's escape rules around commas
+// inside step titles ("Lena, the project manager...") were breaking
+// the filter chain silently — captions just didn't render. SRT is
+// designed for exactly this case and handles all the escaping itself.
 //
 // Output: e2e/test-results/narrated/<spec-slug>-captioned.mp4 per spec.
-//
-// Run after `pnpm test:e2e`:
-//   node e2e/scripts/narrate-captions.mjs
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,6 +21,11 @@ const E2E_ROOT = resolve(__dirname, '..');
 const RESULTS_JSON = resolve(E2E_ROOT, 'test-results/results.json');
 const ARTIFACTS_DIR = resolve(E2E_ROOT, 'test-results/artifacts');
 const NARRATED_DIR = resolve(E2E_ROOT, 'test-results/narrated');
+const SRT_DIR = resolve(E2E_ROOT, 'test-results/srt');
+// ffmpeg's `subtitles` filter chokes on Windows paths with drive colons +
+// spaces (OneDrive\Desktop\...). Write SRT to a short tmp path before
+// running ffmpeg.
+const SRT_TMP_DIR = resolve(tmpdir(), 'pw-captions');
 
 function fail(msg) {
   console.error(`✗ ${msg}`);
@@ -30,13 +34,9 @@ function fail(msg) {
 
 function checkFfmpeg() {
   const result = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' });
-  if (result.status !== 0) {
-    fail('ffmpeg not found on PATH.');
-  }
+  if (result.status !== 0) fail('ffmpeg not found on PATH.');
 }
 
-// Playwright's JSON reporter nests results under suites recursively.
-// Flatten to the leaves we care about.
 function flattenSpecs(report) {
   const out = [];
   function walk(node) {
@@ -46,19 +46,26 @@ function flattenSpecs(report) {
         for (const t of spec.tests ?? []) {
           const run = t.results?.[0];
           if (!run) continue;
-          const steps = (run.steps ?? []).map((s) => ({
-            title: s.title,
-            startTime: s.startTime,
-            duration: s.duration,
-          }));
+          // Playwright JSON only carries `duration` on steps, not start
+          // time. Compute starts cumulatively from the duration sequence.
+          let cursor = 0;
+          const steps = (run.steps ?? []).map((s) => {
+            const start = cursor;
+            const duration = Number(s.duration) || 0;
+            cursor += duration;
+            return {
+              title: s.title,
+              startMs: start,
+              endMs: start + duration,
+            };
+          });
           const videoAttachment = (run.attachments ?? []).find(
             (a) => a.contentType?.startsWith('video/') && a.path,
           );
           out.push({
             file: spec.file,
             title: spec.title,
-            startTime: run.startTime,
-            duration: run.duration,
+            durationMs: Number(run.duration) || 0,
             steps,
             videoPath: videoAttachment?.path ?? null,
           });
@@ -78,25 +85,22 @@ function slug(s) {
     .toLowerCase();
 }
 
-// Escape text for ffmpeg drawtext filter. drawtext is finicky — quotes,
-// colons, backslashes, percent signs, commas all need escaping in
-// filter-graph syntax.
-function escapeDrawtext(text) {
-  return text
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "’") // smart-quote to dodge filter quote handling
-    .replace(/:/g, '\\:')
-    .replace(/%/g, '\\%')
-    .replace(/,/g, '\\,');
+// SRT timestamp format: HH:MM:SS,mmm
+function srtTimestamp(seconds) {
+  const total = Math.max(0, Math.round(seconds * 1000));
+  const ms = total % 1000;
+  const totalSec = Math.floor(total / 1000);
+  const s = totalSec % 60;
+  const m = Math.floor(totalSec / 60) % 60;
+  const h = Math.floor(totalSec / 3600);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
 
 function main() {
   checkFfmpeg();
 
   if (!existsSync(RESULTS_JSON)) {
-    fail(
-      `${RESULTS_JSON} not found — run \`pnpm test:e2e\` first to generate results.`,
-    );
+    fail(`${RESULTS_JSON} not found — run \`pnpm test:e2e\` first.`);
   }
 
   const report = JSON.parse(readFileSync(RESULTS_JSON, 'utf8'));
@@ -104,31 +108,37 @@ function main() {
   if (specs.length === 0) fail('No test results found in results.json.');
 
   mkdirSync(NARRATED_DIR, { recursive: true });
+  mkdirSync(SRT_DIR, { recursive: true });
 
   for (const spec of specs) {
     const specSlug = slug(spec.file);
     console.log(`\n=== ${specSlug} (${spec.steps.length} steps) ===`);
 
     // Locate the video file. Playwright sometimes writes a relative
-    // path; fall back to scanning the artifacts dir for a matching .webm.
+    // path; fall back to scanning the artifacts dir for any .webm.
     let videoPath = spec.videoPath;
     if (!videoPath || !existsSync(videoPath)) {
-      const dirCandidates = readdirSync(ARTIFACTS_DIR, {
-        withFileTypes: true,
-        recursive: true,
-      });
-      const found = dirCandidates.find(
-        (f) => f.isFile?.() && String(f.name).endsWith('.webm'),
-      );
-      if (!found) {
-        console.warn(`  ⚠  no video file found for ${specSlug} — skipping`);
-        continue;
+      try {
+        const entries = readdirSync(ARTIFACTS_DIR, {
+          withFileTypes: true,
+          recursive: true,
+        });
+        const found = entries.find(
+          (f) => f.isFile?.() && String(f.name).endsWith('.webm'),
+        );
+        if (found) {
+          videoPath = resolve(found.parentPath ?? ARTIFACTS_DIR, found.name);
+        }
+      } catch {
+        // recursive readdirSync may fail on older Node; ignore.
       }
-      // @ts-ignore — readdirSync recursive entries carry parentPath in Node 20+
-      videoPath = resolve(found.parentPath ?? found.path ?? ARTIFACTS_DIR, found.name);
+    }
+    if (!videoPath || !existsSync(videoPath)) {
+      console.warn(`  ⚠  no video file found for ${specSlug} — skipping`);
+      continue;
     }
 
-    // Strip the Playwright auto-wrapped outer step (matches the test title).
+    // Strip Playwright's auto-wrapped outer step (matches the test title).
     const visibleSteps = spec.steps.filter(
       (s) => s.title !== spec.title && s.title !== 'Worker Cleanup' && s.title?.trim(),
     );
@@ -137,74 +147,81 @@ function main() {
       continue;
     }
 
-    // Compute per-step on-screen window: [stepStart, nextStepStart).
-    const specStart = new Date(spec.startTime).getTime();
+    // Step start/end times come from cumulative durations (Playwright's
+    // JSON reporter only emits per-step duration, not start). Each
+    // caption stays on screen for that step's duration; the last caption
+    // extends to the end of the recording.
     const captions = visibleSteps.map((s, idx) => {
-      const start = (new Date(s.startTime).getTime() - specStart) / 1000;
-      const nextStart =
-        idx + 1 < visibleSteps.length
-          ? (new Date(visibleSteps[idx + 1].startTime).getTime() - specStart) / 1000
-          : (spec.duration ?? 0) / 1000;
-      return { text: s.title, start: Math.max(0, start), end: Math.max(start + 1, nextStart) };
+      const start = (s.startMs ?? 0) / 1000;
+      const isLast = idx === visibleSteps.length - 1;
+      const end = isLast
+        ? Math.max(start + 1, (spec.durationMs ?? 0) / 1000)
+        : (s.endMs ?? 0) / 1000;
+      return {
+        text: s.title,
+        start: Math.max(0, start),
+        end: Math.max(start + 1, end),
+      };
     });
 
-    // Build a chain of drawtext filters, one per step. Each enable
-    // expression activates only during that step's time window.
-    const drawtextFilters = captions
-      .map((c) => {
-        const txt = escapeDrawtext(c.text);
-        return [
-          `drawtext=text='${txt}'`,
-          // Bottom band, white text on translucent dark box, large enough
-          // to read at 1080p. fontfile fall-back via fontconfig.
-          `fontcolor=white`,
-          `fontsize=28`,
-          `box=1`,
-          `boxcolor=black@0.6`,
-          `boxborderw=20`,
-          `x=(w-text_w)/2`,
-          `y=h-160`,
-          `enable='between(t,${c.start.toFixed(2)},${c.end.toFixed(2)})'`,
-        ].join(':');
-      })
-      .join(',');
+    // Write SRT files to BOTH the repo dir (so they're inspectable +
+    // checkable into git) and a short tmp path (so ffmpeg's subtitles
+    // filter can actually open them — the filter graph parser chokes on
+    // OneDrive\Desktop\... paths with spaces and drive colons).
+    const srtPath = resolve(SRT_DIR, `${specSlug}.srt`);
+    const srtTmpPath = resolve(SRT_TMP_DIR, `${specSlug}.srt`);
+    const srtBody = captions
+      .map(
+        (c, i) =>
+          `${i + 1}\n${srtTimestamp(c.start)} --> ${srtTimestamp(c.end)}\n${c.text}\n`,
+      )
+      .join('\n');
+    writeFileSync(srtPath, srtBody, 'utf8');
+    mkdirSync(SRT_TMP_DIR, { recursive: true });
+    writeFileSync(srtTmpPath, srtBody, 'utf8');
+
+    // Style: bold, big, white on black-translucent box at the bottom.
+    // FontName is a safe fallback; libass picks closest available.
+    const styleOverride =
+      "FontName=Arial,FontSize=18,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BackColour=&H80000000,BorderStyle=4,Outline=2,Shadow=0,Alignment=2,MarginV=40,Bold=1";
 
     const outputPath = resolve(NARRATED_DIR, `${specSlug}-captioned.mp4`);
-    const ffmpegArgs = [
-      '-i',
-      videoPath,
-      '-vf',
-      drawtextFilters,
-      '-c:v',
-      'libx264',
-      '-pix_fmt',
-      'yuv420p',
-      '-an', // no audio
-      '-y',
-      outputPath,
-    ];
+    // Run ffmpeg from the tmp dir and pass the SRT as a bare basename.
+    // Avoids the entire filter-path-escape rabbit hole.
+    const filter = `subtitles='${specSlug}.srt':force_style='${styleOverride}'`;
 
     console.log(`  → ${outputPath}`);
-    const result = spawnSync('ffmpeg', ffmpegArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const result = spawnSync(
+      'ffmpeg',
+      [
+        '-i',
+        videoPath,
+        '-vf',
+        filter,
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
+        '-preset',
+        'fast',
+        '-crf',
+        '23',
+        '-an',
+        '-y',
+        outputPath,
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'], cwd: SRT_TMP_DIR },
+    );
     if (result.status !== 0) {
       const err = result.stderr?.toString() ?? '';
-      // Surface the LAST ffmpeg error block; the full output is enormous.
-      const lastError = err.split('\n').slice(-30).join('\n');
-      console.error(`  ✗ ffmpeg failed:\n${lastError}`);
+      const tail = err.split('\n').slice(-20).join('\n');
+      console.error(`  ✗ ffmpeg failed:\n${tail}`);
       continue;
     }
-    console.log(`  ✓ ${captions.length} captions overlaid`);
+    console.log(`  ✓ ${captions.length} captions burned`);
   }
 
   console.log(`\nDone. Captioned previews in: ${NARRATED_DIR}`);
-  console.log(
-    '\nReview the MP4s. If pacing + coverage look right, add ELEVENLABS_API_KEY +',
-  );
-  console.log(
-    'ELEVENLABS_VOICE_ID to .env.local and run `pnpm test:e2e:narrate` for audio.',
-  );
 }
 
 main();

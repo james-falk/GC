@@ -13,6 +13,26 @@ const nextConfig: NextConfig = {
     '@constructor/pdf',
     '@constructor/ui',
   ],
+  // Stop dev-mode HMR from reacting to test files. Playwright specs +
+  // narration scripts under e2e/ get edited frequently during demo
+  // recording; each edit was triggering a Fast Refresh full reload that
+  // wedged in-flight Playwright runs.
+  webpack: (config, { dev }) => {
+    if (dev) {
+      config.watchOptions = {
+        ...config.watchOptions,
+        ignored: [
+          ...(Array.isArray(config.watchOptions?.ignored)
+            ? config.watchOptions.ignored
+            : []),
+          '**/e2e/**',
+          '**/node_modules/**',
+          '**/.next/**',
+        ],
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

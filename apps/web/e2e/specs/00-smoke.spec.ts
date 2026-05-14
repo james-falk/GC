@@ -33,8 +33,11 @@ test('signed-in user can reach the dashboard', async ({ page }) => {
 
 test('sidebar shows expected nav items', async ({ page }) => {
   await page.goto('/dashboard');
-  await expect(page.getByRole('link', { name: 'Projects' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Organizations' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Pay Apps' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Change Orders' })).toBeVisible();
+  // Scope to the sidebar so we don't match the dashboard's "Quick links"
+  // cards (which use the same labels).
+  const sidebar = page.locator('aside').first();
+  await expect(sidebar.getByRole('link', { name: 'Projects' })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Organizations' })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Pay Apps' })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Change Orders' })).toBeVisible();
 });

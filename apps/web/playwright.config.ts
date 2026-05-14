@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Playwright config for the constructor demo + smoke tests.
 //
@@ -33,22 +37,34 @@ export default defineConfig({
   // dead link and fail. Surface failures immediately so we fix them.
   retries: 0,
 
+  // Per-test timeout. Scenarios with slowMo + 15-30 steps per spec
+  // need plenty of headroom — 5 minutes per scenario is generous but
+  // matches the actual recording length.
+  timeout: 5 * 60 * 1000,
+
+  // expect() default is 5s; Next.js dev cold-compiles a route on first
+  // hit which can blow past that. 15s gives the compile time to land
+  // before the assertion fires.
+  expect: {
+    timeout: 15_000,
+  },
+
   reporter: [
     ['list'],
-    ['html', { outputFolder: 'e2e/playwright-report', open: 'never' }],
-    ['json', { outputFile: 'e2e/test-results/results.json' }],
+    ['html', { outputFolder: resolve(__dirname, 'e2e/playwright-report'), open: 'never' }],
+    ['json', { outputFile: resolve(__dirname, 'e2e/test-results/results.json') }],
   ],
 
-  outputDir: 'e2e/test-results/artifacts',
+  outputDir: resolve(__dirname, 'e2e/test-results/artifacts'),
 
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3001',
+    baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
     trace: 'on',
     video: { mode: 'on', size: { width: 1440, height: 900 } },
     screenshot: 'only-on-failure',
     storageState: 'e2e/.auth/storage-state.json',
-    actionTimeout: 20_000,
-    navigationTimeout: 30_000,
+    actionTimeout: 30_000,
+    navigationTimeout: 60_000,
     viewport: { width: 1440, height: 900 },
 
     // Pace every action so a future narration overlay isn't faster
